@@ -57,6 +57,12 @@ class ModelTests(unittest.TestCase):
         self.assertEqual([l["name"] for l in other["lights"]], ["Plug"])
         self.assertFalse(other["lights"][0]["dimmable"])
 
+    def test_room_color_and_archetype(self):
+        rooms, _, _ = hue.build_model(RESOURCES)
+        self.assertEqual(rooms[0]["color"], hue.light_color(RESOURCES[0]))
+        self.assertEqual(hue.blend_colors(["#ff0000", "#0000ff"]), "#800080")
+        self.assertEqual(hue.blend_colors([]), "#ffd27a")
+
     def test_colors(self):
         self.assertEqual(hue.xy_to_hex(0.7, 0.29)[:3], "#ff")
         self.assertTrue(hue.mirek_to_hex(500).startswith("#ff"))

@@ -24,7 +24,7 @@ Panel {
   readonly property var bridge: stats.bridge || ({})
   property var expanded: ({})   // room id -> true while its lights are shown
   property bool confirmUnpair: false
-  readonly property real maxRoomListHeight: Style.space(420)
+  readonly property real maxRoomListHeight: Style.space(520)
   readonly property color fg: Color.popups.text
   readonly property color dim: Qt.darker(fg, 1.45)
   readonly property string font: root.bar ? root.bar.fontFamily : Style.font.family
@@ -47,6 +47,57 @@ Panel {
     }
   }
 
+  // Room type (Hue archetype) to a Material Design glyph.
+  function roomIcon(room) {
+    if (room.kind === "zone") return "󰌨"
+    if (room.kind === "other") return "󰌵"
+    // Many rooms keep the Hue app's default archetype, so the name wins when it is telling.
+    var name = String(room.name || "").toLowerCase()
+    var byName = [
+      [/schlaf|bed|kinder|gäste|guest|nursery/, "󰋣"],
+      [/küche|kueche|kitchen|ess|dining/, "󰩰"],
+      [/bad|bath|wc|toilet|dusche/, "󰦠"],
+      [/büro|buero|office|arbeit|studio/, "󰌢"],
+      [/flur|diele|treppe|hall|stair|eingang/, "󰓍"],
+      [/garage|carport/, "󰛙"],
+      [/garten|terrasse|balkon|garden|terrace|balcony|patio|außen|outdoor/, "󰔱"],
+      [/wohn|living|lounge|tv/, "󰒹"]
+    ]
+    for (var i = 0; i < byName.length; i++) if (byName[i][0].test(name)) return byName[i][1]
+    switch (room.archetype) {
+    case "living_room": case "lounge": case "tv": return "󰒹"
+    case "kitchen": case "dining": return "󰩰"
+    case "bedroom": case "kids_bedroom": case "guest_room": case "nursery": return "󰋣"
+    case "bathroom": case "toilet": return "󰦠"
+    case "office": case "computer": case "studio": return "󰌢"
+    case "hallway": case "staircase": case "top_floor": case "upstairs": case "downstairs": return "󰓍"
+    case "garage": case "carport": case "driveway": return "󰛙"
+    case "garden": case "terrace": case "balcony": case "porch": case "barbecue": case "pool": case "front_door": return "󰔱"
+    default: return "󰋜"
+    }
+  }
+  function roomStatus(room, unreachable) {
+    var total = room.lights.length
+    var parts = []
+    if (room.kind === "zone") parts.push("Zone")
+    parts.push(room.on ? room.on_count + " of " + total + " on" : (total === 1 ? "Off · 1 light" : "Off · " + total + " lights"))
+    if (unreachable > 0) parts.push(unreachable + " unreachable")
+    return parts.join(" · ")
+  }
+  // Dark or light glyph on top of a light colour, whichever reads better.
+  function onTint(c) {
+    var luma = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b
+    return luma > 0.6 ? "#1a1a1a" : "#ffffff"
+  }
+
+  // The shell slider changes its value on mouse wheel; inside a scrolling list that
+  // would dim (or switch on) lights while scrolling, so sliders forward the wheel here.
+  function scrollRooms(wheel) {
+    var f = roomScroller
+    if (f.contentHeight <= f.height) return
+    f.contentY = Math.max(0, Math.min(f.contentHeight - f.height, f.contentY - wheel.angleDelta.y * 0.6))
+  }
+
   function open() { root.controller.show() }
   function close() { root.controller.hide(); root.confirmUnpair = false }
   function toggle() { if (root.opened) root.close(); else root.open() }
@@ -58,7 +109,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(410))
+    contentWidth: panel.fittedContentWidth(Style.space(430))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
     PanelKeyCatcher {
@@ -254,164 +305,279 @@ Panel {
             Column {
               id: roomColumn
               width: roomScroller.width
-              spacing: Style.space(12)
+              spacing: Style.space(8)
 
               Repeater {
                 model: root.rooms.length
-                delegate: Column {
+                delegate: Rectangle {
                   id: roomBlock
                   required property int index
                   readonly property var room: root.roomAt(index)
                   readonly property bool isOpen: root.expanded[root.roomKey(room)] === true
+                  property bool allScenes: false
+                  readonly property bool lit: room.on === true
+                  readonly property color tint: lit ? (room.color || Color.accent) : root.fg
+                  readonly property real pad: Style.space(10)
+                  readonly property int unreachable: {
+                    var n = 0
+                    for (var i = 0; i < room.lights.length; i++) if (room.lights[i].reachable === false) n++
+                    return n
+                  }
                   width: roomColumn.width
-                  spacing: Style.space(4)
+                  height: cardColumn.implicitHeight + 2 * pad
+                  radius: Style.cornerRadius
+                  color: lit
+                    ? Qt.rgba(tint.r, tint.g, tint.b, cardHover.hovered ? 0.17 : 0.12)
+                    : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, cardHover.hovered ? 0.07 : 0.04)
+                  border.width: 1
+                  border.color: lit
+                    ? Qt.rgba(tint.r, tint.g, tint.b, 0.4)
+                    : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.08)
+                  Behavior on color { ColorAnimation { duration: 200 } }
 
-                  Item {
-                    width: parent.width
-                    height: roomSwitch.implicitHeight
-                    Text {
-                      id: chevron
-                      textFormat: Text.PlainText
-                      anchors.left: parent.left
-                      anchors.verticalCenter: parent.verticalCenter
-                      width: Style.space(18)
-                      text: roomBlock.isOpen ? "󰅀" : "󰅂"
-                      color: root.dim
-                      font.family: root.font
-                      font.pixelSize: Style.font.body
-                    }
-                    Text {
-                      id: roomName
-                      textFormat: Text.PlainText
-                      anchors.left: chevron.right
-                      anchors.right: roomCount.left
-                      anchors.rightMargin: Style.space(8)
-                      anchors.verticalCenter: parent.verticalCenter
-                      elide: Text.ElideRight
-                      text: roomBlock.room.name
-                      color: roomBlock.room.on ? root.fg : root.dim
-                      font.family: root.font
-                      font.pixelSize: Style.font.body
-                      font.bold: true
-                    }
-                    Text {
-                      id: roomCount
-                      textFormat: Text.PlainText
-                      anchors.right: roomSwitch.left
-                      anchors.rightMargin: Style.space(6)
-                      anchors.verticalCenter: parent.verticalCenter
-                      text: roomBlock.room.on_count + "/" + roomBlock.room.lights.length
-                        + (roomBlock.room.kind === "zone" ? " · zone" : "")
-                      color: root.dim
-                      font.family: root.font
-                      font.pixelSize: Style.font.caption
-                    }
-                    MouseArea {
-                      anchors.left: parent.left
-                      anchors.right: roomCount.right
-                      anchors.top: parent.top
-                      anchors.bottom: parent.bottom
-                      cursorShape: Qt.PointingHandCursor
-                      onClicked: root.toggleExpanded(roomBlock.room)
-                    }
-                    ToggleSwitch {
-                      id: roomSwitch
-                      anchors.right: parent.right
-                      anchors.verticalCenter: parent.verticalCenter
-                      checked: roomBlock.room.on === true
-                      foreground: root.fg
-                      onToggled: root.setRoom(roomBlock.room, { on: !roomBlock.room.on })
-                    }
-                  }
+                  HoverHandler { id: cardHover }
 
-                  PanelSlider {
-                    width: parent.width
-                    bar: root.bar
-                    minimum: 1
-                    maximum: 100
-                    step: 5
-                    value: roomBlock.room.on ? Math.max(1, roomBlock.room.bri) : 1
-                    opacity: roomBlock.room.on ? 1 : 0.5
-                    onMoved: function(v) { root.setRoom(roomBlock.room, { bri: v }) }
-                  }
+                  Column {
+                    id: cardColumn
+                    x: roomBlock.pad
+                    y: roomBlock.pad
+                    width: roomBlock.width - 2 * roomBlock.pad
+                    spacing: Style.space(8)
 
-                  Flow {
-                    visible: roomBlock.isOpen && roomBlock.room.scenes.length > 0
-                    width: parent.width
-                    leftPadding: Style.space(18)
-                    spacing: Style.space(6)
-                    Repeater {
-                      model: roomBlock.isOpen ? roomBlock.room.scenes.length : 0
-                      delegate: Button {
-                        required property int index
-                        readonly property var scene: roomBlock.room.scenes[index] || ({})
-                        text: scene.name || ""
-                        iconText: "󰏘"
-                        bordered: true
-                        selected: scene.active === true
-                        foreground: root.fg
-                        fontFamily: root.font
-                        fontSize: Style.font.caption
-                        iconSize: Style.font.caption
-                        onClicked: root.send({ cmd: "scene", id: scene.id })
-                      }
-                    }
-                  }
+                    // Header: room icon, name + status, expand chevron, switch.
+                    Item {
+                      width: parent.width
+                      height: Math.max(badge.height, roomSwitch.implicitHeight)
 
-                  Repeater {
-                    model: roomBlock.isOpen ? roomBlock.room.lights.length : 0
-                    delegate: Item {
-                      id: lightRow
-                      required property int index
-                      readonly property var light: roomBlock.room.lights[index] || ({})
-                      width: roomBlock.width
-                      height: lightSwitch.implicitHeight
                       Rectangle {
-                        id: swatch
-                        x: Style.space(20)
+                        id: badge
+                        anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Style.space(10); height: width; radius: width / 2
-                        color: lightRow.light.on ? lightRow.light.color : "transparent"
-                        border.width: 1
-                        border.color: lightRow.light.on ? lightRow.light.color : root.dim
+                        width: Style.space(34)
+                        height: width
+                        radius: Style.cornerRadius > 0 ? width / 2 : 0
+                        color: roomBlock.lit ? roomBlock.tint : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.08)
+                        Behavior on color { ColorAnimation { duration: 200 } }
+                        Text {
+                          textFormat: Text.PlainText
+                          anchors.centerIn: parent
+                          text: root.roomIcon(roomBlock.room)
+                          color: roomBlock.lit ? root.onTint(roomBlock.tint) : root.dim
+                          font.family: root.font
+                          font.pixelSize: Style.font.body * 1.15
+                        }
                       }
+
+                      Column {
+                        anchors.left: badge.right
+                        anchors.leftMargin: Style.space(10)
+                        anchors.right: chevron.left
+                        anchors.rightMargin: Style.space(6)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(1)
+                        Text {
+                          textFormat: Text.PlainText
+                          width: parent.width
+                          elide: Text.ElideRight
+                          text: roomBlock.room.name
+                          color: roomBlock.lit ? root.fg : Qt.lighter(root.dim, 1.15)
+                          font.family: root.font
+                          font.pixelSize: Style.font.body
+                          font.bold: true
+                        }
+                        Text {
+                          textFormat: Text.PlainText
+                          width: parent.width
+                          elide: Text.ElideRight
+                          text: root.roomStatus(roomBlock.room, roomBlock.unreachable)
+                          color: root.dim
+                          font.family: root.font
+                          font.pixelSize: Style.font.caption
+                        }
+                      }
+
                       Text {
+                        id: chevron
                         textFormat: Text.PlainText
-                        anchors.left: swatch.right
-                        anchors.leftMargin: Style.space(8)
-                        anchors.right: lightSlider.left
-                        anchors.rightMargin: Style.space(8)
-                        anchors.verticalCenter: parent.verticalCenter
-                        elide: Text.ElideRight
-                        text: lightRow.light.name + (lightRow.light.reachable === false ? " (unreachable)" : "")
-                        color: lightRow.light.on && lightRow.light.reachable !== false ? root.fg : root.dim
-                        font.family: root.font
-                        font.pixelSize: Style.font.caption
-                      }
-                      PanelSlider {
-                        id: lightSlider
-                        anchors.right: lightSwitch.left
+                        anchors.right: roomSwitch.left
                         anchors.rightMargin: Style.space(4)
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Style.space(120)
-                        visible: lightRow.light.dimmable === true
+                        text: roomBlock.isOpen ? "󰅀" : "󰅂"
+                        color: headerMouse.containsMouse ? root.fg : root.dim
+                        font.family: root.font
+                        font.pixelSize: Style.font.body
+                      }
+
+                      MouseArea {
+                        id: headerMouse
+                        anchors.left: parent.left
+                        anchors.right: chevron.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.toggleExpanded(roomBlock.room)
+                      }
+
+                      ToggleSwitch {
+                        id: roomSwitch
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        cursorRing: false
+                        checked: roomBlock.lit
+                        foreground: root.fg
+                        accent: roomBlock.lit ? roomBlock.tint : Color.accent
+                        onToggled: root.setRoom(roomBlock.room, { on: !roomBlock.lit })
+                      }
+                    }
+
+                    // Brightness, only while the room is on.
+                    Item {
+                      visible: roomBlock.lit
+                      width: parent.width
+                      height: roomSlider.implicitHeight
+                      PanelSlider {
+                        id: roomSlider
+                        anchors.left: parent.left
+                        anchors.right: roomPct.left
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
                         bar: root.bar
                         minimum: 1
                         maximum: 100
                         step: 5
-                        knobSize: Style.space(12)
-                        value: lightRow.light.on ? Math.max(1, lightRow.light.bri) : 1
-                        opacity: lightRow.light.on ? 1 : 0.5
-                        onMoved: function(v) { root.send({ cmd: "light", id: lightRow.light.id, bri: v }) }
+                        fillColor: roomBlock.tint
+                        value: Math.max(1, roomBlock.room.bri)
+                        onMoved: function(v) { root.setRoom(roomBlock.room, { bri: v }) }
                       }
-                      ToggleSwitch {
-                        id: lightSwitch
+                      MouseArea {
+                        anchors.fill: roomSlider
+                        acceptedButtons: Qt.NoButton
+                        onWheel: function(wheel) { root.scrollRooms(wheel) }
+                      }
+                      Text {
+                        id: roomPct
+                        textFormat: Text.PlainText
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        trackHeight: Style.space(18)
-                        checked: lightRow.light.on === true
-                        foreground: root.fg
-                        onToggled: root.send({ cmd: "light", id: lightRow.light.id, on: !lightRow.light.on })
+                        width: Style.space(38)
+                        horizontalAlignment: Text.AlignRight
+                        text: Math.round(roomSlider.liveValue) + "%"
+                        color: root.fg
+                        font.family: root.font
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+
+                    Rectangle {
+                      visible: roomBlock.isOpen
+                      width: parent.width
+                      height: 1
+                      color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.1)
+                    }
+
+                    Repeater {
+                      model: roomBlock.isOpen ? roomBlock.room.lights.length : 0
+                      delegate: Item {
+                        id: lightRow
+                        required property int index
+                        readonly property var light: roomBlock.room.lights[index] || ({})
+                        readonly property bool lightOn: light.on === true
+                        width: cardColumn.width
+                        height: lightSwitch.implicitHeight
+                        Rectangle {
+                          id: swatch
+                          anchors.left: parent.left
+                          anchors.leftMargin: Style.space(12)
+                          anchors.verticalCenter: parent.verticalCenter
+                          width: Style.space(10); height: width; radius: width / 2
+                          color: lightRow.lightOn ? lightRow.light.color : "transparent"
+                          opacity: lightRow.light.reachable === false ? 0.4 : 1
+                          border.width: 1
+                          border.color: lightRow.lightOn ? lightRow.light.color : root.dim
+                        }
+                        Text {
+                          textFormat: Text.PlainText
+                          anchors.left: swatch.right
+                          anchors.leftMargin: Style.space(14)
+                          anchors.right: lightSlider.left
+                          anchors.rightMargin: Style.space(8)
+                          anchors.verticalCenter: parent.verticalCenter
+                          elide: Text.ElideRight
+                          text: lightRow.light.name + (lightRow.light.reachable === false ? " · unreachable" : "")
+                          color: lightRow.lightOn && lightRow.light.reachable !== false ? root.fg : root.dim
+                          font.family: root.font
+                          font.pixelSize: Style.font.caption
+                        }
+                        PanelSlider {
+                          id: lightSlider
+                          anchors.right: lightSwitch.left
+                          anchors.rightMargin: Style.space(6)
+                          anchors.verticalCenter: parent.verticalCenter
+                          width: Style.space(110)
+                          visible: lightRow.light.dimmable === true
+                          bar: root.bar
+                          minimum: 1
+                          maximum: 100
+                          step: 5
+                          knobSize: Style.space(12)
+                          fillColor: lightRow.lightOn ? lightRow.light.color : root.dim
+                          value: lightRow.lightOn ? Math.max(1, lightRow.light.bri) : 1
+                          opacity: lightRow.lightOn ? 1 : 0.45
+                          onMoved: function(v) { root.send({ cmd: "light", id: lightRow.light.id, bri: v }) }
+                        }
+                        MouseArea {
+                          anchors.fill: lightSlider
+                          acceptedButtons: Qt.NoButton
+                          onWheel: function(wheel) { root.scrollRooms(wheel) }
+                        }
+                        ToggleSwitch {
+                          id: lightSwitch
+                          anchors.right: parent.right
+                          anchors.verticalCenter: parent.verticalCenter
+                          cursorRing: false
+                          trackHeight: Style.space(16)
+                          checked: lightRow.lightOn
+                          foreground: root.fg
+                          accent: lightRow.lightOn ? lightRow.light.color : Color.accent
+                          onToggled: root.send({ cmd: "light", id: lightRow.light.id, on: !lightRow.lightOn })
+                        }
+                      }
+                    }
+                    Flow {
+                      visible: roomBlock.isOpen && roomBlock.room.scenes.length > 0
+                      width: parent.width
+                      topPadding: Style.space(2)
+                      spacing: Style.space(6)
+                      readonly property int limit: 6
+                      readonly property int total: roomBlock.room.scenes.length
+                      Repeater {
+                        model: roomBlock.isOpen
+                          ? (roomBlock.allScenes ? parent.total : Math.min(parent.total, parent.limit)) : 0
+                        delegate: Button {
+                          required property int index
+                          readonly property var scene: roomBlock.room.scenes[index] || ({})
+                          text: scene.name || ""
+                          bordered: true
+                          selected: scene.active === true
+                          foreground: root.fg
+                          fontFamily: root.font
+                          fontSize: Style.font.caption
+                          horizontalPadding: Style.space(8)
+                          verticalPadding: Style.space(2)
+                          tooltipText: "Recall scene"
+                          onClicked: root.send({ cmd: "scene", id: scene.id })
+                        }
+                      }
+                      Button {
+                        visible: parent.total > parent.limit
+                        text: roomBlock.allScenes ? "less" : "+" + (parent.total - parent.limit) + " more"
+                        foreground: root.dim
+                        fontFamily: root.font
+                        fontSize: Style.font.caption
+                        horizontalPadding: Style.space(8)
+                        verticalPadding: Style.space(2)
+                        onClicked: roomBlock.allScenes = !roomBlock.allScenes
                       }
                     }
                   }

@@ -156,6 +156,14 @@ def light_color(light):
     return "#ffd27a"
 
 
+def blend_colors(colors):
+    """Average of '#rrggbb' strings (the room's swatch), warm white when empty."""
+    rgb = [tuple(int(c[i:i + 2], 16) for i in (1, 3, 5)) for c in colors if re.fullmatch(r"#[0-9a-f]{6}", c or "")]
+    if not rgb:
+        return "#ffd27a"
+    return "#%02x%02x%02x" % tuple(int(round(sum(ch[i] for ch in rgb) / len(rgb))) for i in range(3))
+
+
 def build_model(resources):
     """Turn the flat CLIP v2 /resource list into rooms -> lights / scenes."""
     by_type = {}
@@ -233,6 +241,8 @@ def build_model(resources):
                 "on": any(l["on"] for l in members),
                 "bri": round(float(bri), 1),
                 "on_count": len(on_members),
+                "archetype": clean((group.get("metadata") or {}).get("archetype") or "", 30),
+                "color": blend_colors([l["color"] for l in on_members]),
                 "lights": members,
                 "scenes": sorted(scenes_by_group.get(group["id"], []), key=lambda s: s["name"].lower()),
             })
@@ -244,7 +254,8 @@ def build_model(resources):
             "id": "", "kind": "other", "name": "Other lights", "grouped_light": "",
             "on": bool(on_members),
             "bri": round(sum(l["bri"] for l in on_members) / len(on_members), 1) if on_members else 0,
-            "on_count": len(on_members), "lights": loose, "scenes": [],
+            "on_count": len(on_members), "archetype": "", "color": blend_colors([l["color"] for l in on_members]),
+            "lights": loose, "scenes": [],
         })
     rooms.sort(key=lambda r: (r["kind"] != "room", r["name"].lower()))
     return rooms, len(lights), sum(1 for l in lights.values() if (l.get("on") or {}).get("on"))
