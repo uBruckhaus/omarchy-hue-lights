@@ -16,8 +16,11 @@ import ipaddress
 import json
 import os
 import re
+import select
 import socket
 import ssl
+import stat
+import tempfile
 import subprocess
 import sys
 import threading
@@ -31,7 +34,9 @@ POLL_CLOSED = 20.0    # seconds between refreshes while it is closed
 PAIR_WINDOW = 35.0    # how long to keep asking for a key after "pair"
 LIGHT_INTERVAL = 0.12 # Hue guidance: ~10 light commands per second
 GROUP_INTERVAL = 0.6  # ... and ~1 group command per second
-HTTP_TIMEOUT = 4.0
+HTTP_TIMEOUT = 4.0     # overall deadline per request: connect, TLS, headers and body
+MAX_BODY = 4 * 1024 * 1024
+MAX_CONFIG = 64 * 1024
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 BRIDGE_ID_RE = re.compile(r"^[0-9A-F]{16}$")
@@ -58,7 +63,8 @@ def clamp(value, low, high):
 
 
 def clean(text, limit=60):
-    text = "".join(ch for ch in str(text or "") if ch.isprintable())
+    """Names come from the bridge or mDNS: no markup or control characters ever reach Qt."""
+    text = "".join(ch for ch in str(text or "") if ch.isprintable() and ch not in "<>&")
     return text.strip()[:limit]
 
 
@@ -292,28 +298,106 @@ def parse_command(line):
 # ---------------------------------------------------------------------------
 # Config
 
+def private_config_dir():
+    """Create ~/.config/omarchy/hue-lights as 0700 and refuse it unless it is our own real directory."""
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    info = os.lstat(CONFIG_DIR)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise OSError("config directory is not a private directory owned by this user")
+    if info.st_mode & 0o077:
+        os.chmod(CONFIG_DIR, 0o700)
+    return CONFIG_DIR
+
+
 def load_config():
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
+        fd = os.open(CONFIG_PATH, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return {}
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > MAX_CONFIG:
+            return {}
+        raw = os.read(fd, MAX_CONFIG)
+    except OSError:
+        return {}
+    finally:
+        os.close(fd)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except ValueError:
         return {}
     if not isinstance(data, dict):
         return {}
     if not (valid_bridge_ip(data.get("ip")) and isinstance(data.get("app_key"), str)
-            and re.fullmatch(r"[0-9a-f]{64}", str(data.get("fingerprint", "")))):
+            and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", data["app_key"])
+            and re.fullmatch(r"[0-9a-f]{64}", str(data.get("fingerprint", "")))
+            and BRIDGE_ID_RE.match(str(data.get("bridge_id", "")))):
         return {}
     return data
 
 
 def save_config(data):
-    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
-    os.chmod(CONFIG_DIR, 0o700)
-    tmp = CONFIG_PATH + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-    os.replace(tmp, CONFIG_PATH)
+    """Atomic 0600 write via a unique temp file (never a predictable name, never a followed link)."""
+    directory = private_config_dir()
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".config.", suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, CONFIG_PATH)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def remove_config():
+    try:
+        info = os.lstat(CONFIG_PATH)
+    except OSError:
+        return
+    if (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)) and info.st_uid == os.getuid():
+        os.unlink(CONFIG_PATH)
+
+
+def run_bounded(argv, timeout=6.0, max_bytes=262144):
+    """Run a fixed argv (no shell) and read at most `max_bytes` of stdout before `timeout`."""
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return ""
+    chunks, size = [], 0
+    deadline = time.monotonic() + timeout
+    fd = proc.stdout.fileno()
+    try:
+        while size < max_bytes:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select([fd], [], [], remaining)
+            if not ready:
+                break
+            chunk = os.read(fd, min(65536, max_bytes - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    except OSError:
+        pass
+    finally:
+        proc.stdout.close()
+        if proc.poll() is None:
+            proc.kill()
+        try:
+            proc.wait(timeout=0.5)
+        except subprocess.SubprocessError:
+            pass
+    return b"".join(chunks).decode("utf-8", "replace")
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +407,7 @@ class PinError(Exception):
     pass
 
 
-def https_request(ip, method, path, body=None, headers=None, pin=None, timeout=HTTP_TIMEOUT):
+def https_request(ip, method, path, body=None, headers=None, pin=None, timeout=HTTP_TIMEOUT, port=443):
     """One HTTPS request to the bridge. Returns (status, parsed_json, (fingerprint, cn)).
 
     With `pin`, the peer certificate must match pin["fingerprint"] and have
@@ -332,7 +416,22 @@ def https_request(ip, method, path, body=None, headers=None, pin=None, timeout=H
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE  # self-signed Philips cert; pinned below instead
-    conn = http.client.HTTPSConnection(ip, 443, timeout=timeout, context=ctx)
+    conn = http.client.HTTPSConnection(ip, port, timeout=timeout, context=ctx)
+    # One overall deadline: a responder that drips headers or body byte by byte is
+    # cut off when the timer shuts the socket down, not just per recv().
+    expired = threading.Event()
+
+    def cut():
+        expired.set()
+        sock = conn.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+    watchdog = threading.Timer(timeout, cut)
+    watchdog.daemon = True
+    watchdog.start()
     try:
         conn.connect()
         der = conn.sock.getpeercert(binary_form=True) or b""
@@ -347,13 +446,28 @@ def https_request(ip, method, path, body=None, headers=None, pin=None, timeout=H
         hdrs.update(headers or {})
         conn.request(method, path, body=data, headers=hdrs)
         resp = conn.getresponse()
-        raw = resp.read(4 * 1024 * 1024)
+        length = resp.getheader("Content-Length")
+        if length is not None and (not length.strip().isdigit() or int(length) > MAX_BODY):
+            raise OSError("reply too large")
+        chunks, size = [], 0
+        while size <= MAX_BODY:
+            chunk = resp.read1(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        if size > MAX_BODY:
+            raise OSError("reply too large")
+        if expired.is_set():
+            raise OSError("bridge reply timed out")
+        raw = b"".join(chunks)
         try:
             parsed = json.loads(raw.decode("utf-8")) if raw else None
         except ValueError:
             parsed = None
         return resp.status, parsed, peer
     finally:
+        watchdog.cancel()
         conn.close()
 
 
@@ -450,12 +564,7 @@ class Hue:
                 return
 
     def discover_now(self):
-        try:
-            out = subprocess.run(["avahi-browse", "-rtpk", "_hue._tcp"], stdin=subprocess.DEVNULL,
-                                 capture_output=True, text=True, timeout=6).stdout
-        except (OSError, subprocess.SubprocessError):
-            return []
-        return parse_avahi_hue(out.splitlines())
+        return parse_avahi_hue(run_bounded(["avahi-browse", "-rtpk", "_hue._tcp"]).splitlines())
 
     def discover(self):
         with self.lock:
@@ -471,6 +580,7 @@ class Hue:
         ip = self.pair_ip
         try:
             _, cfg, peer = https_request(ip, "GET", "/api/0/config")
+            cfg = cfg if isinstance(cfg, dict) else {}
             bridge_id = str((cfg or {}).get("bridgeid", "")).upper()
             if not BRIDGE_ID_RE.match(bridge_id) or peer[1] != bridge_id:
                 with self.lock:
@@ -483,11 +593,14 @@ class Hue:
                                            {"devicetype": "omarchy_hue_lights#" + host, "generateclientkey": True})
             if peer2 != peer:
                 raise PinError("certificate changed during pairing")
-            entry = resp[0] if isinstance(resp, list) and resp else {}
-            if "success" in entry and isinstance(entry["success"].get("username"), str):
+            entry = resp[0] if isinstance(resp, list) and resp and isinstance(resp[0], dict) else {}
+            if not isinstance(entry.get("success", {}), dict) or not isinstance(entry.get("error", {}), dict):
+                entry = {}
+            key = (entry.get("success") or {}).get("username")
+            if isinstance(key, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", key):
                 config = {
                     "ip": ip, "bridge_id": bridge_id, "fingerprint": peer[0],
-                    "app_key": entry["success"]["username"],
+                    "app_key": key,
                     "name": clean(cfg.get("name") or "Hue Bridge"), "model": clean(cfg.get("modelid") or ""),
                 }
                 save_config(config)
@@ -594,7 +707,7 @@ class Hue:
             self.emit()
         elif name == "unpair":
             try:
-                os.remove(CONFIG_PATH)
+                remove_config()
             except OSError:
                 pass
             with self.lock:
