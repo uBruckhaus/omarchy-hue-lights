@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "ubruckhaus.hue-lights",
+  "name": "Hue Lights",
+  "version": "0.1.0",
+  "author": "uBruckhaus",
+  "description": "Control your Philips Hue lights from the bar: rooms and single lights on/off, brightness and scenes, straight over your local Hue bridge (no cloud, pinned HTTPS).",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Hue Lights",
+    "description": "Philips Hue rooms, lights, brightness and scenes",
+    "category": "System",
+    "defaultSection": "right",
+    "allowMultiple": false
+  },
+  "license": "MIT"
+}
