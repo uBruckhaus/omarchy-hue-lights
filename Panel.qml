@@ -231,8 +231,11 @@ Panel {
               visible: root.phase !== "pairing"
               width: parent.width
               height: manualPair.implicitHeight
-              TextField {
+              // Key-events-only field: it never reads the clipboard (a Qt TextField would read
+              // every foreign clipboard change, unbounded, inside the shared shell). Type the IP.
+              KeyTextField {
                 id: manualIp
+                maximumLength: 64
                 anchors.left: parent.left
                 anchors.right: manualPair.left
                 anchors.rightMargin: Style.space(8)
