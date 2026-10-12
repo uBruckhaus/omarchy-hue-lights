@@ -4,7 +4,7 @@ Control your Philips Hue lights from the Omarchy bar. Switch rooms, zones and si
 
 ![Hue Lights panel](preview.png)
 
-- **Bar icon:** a lit bulb in your theme's accent colour while any light is on, a dim bulb when all are off. Left click opens the panel; right click switches every light off. The tooltip lists your rooms with their brightness.
+- **Bar icon:** a lit bulb in your theme's green while any light is on, a dim bulb when all are off. Left click opens the panel; right click switches every light off. The tooltip lists your rooms with their brightness.
 - **Room cards:** one card per room and zone, with a room icon, "2 of 3 on" status and an on/off switch. Rooms that are on are tinted in the colour of their lights and show a brightness slider.
 - **Single lights and scenes:** click a room to expand it: every light with its colour, a brightness slider and a switch, then the room's scenes (the active one is highlighted).
 - **Unreachable lights** (for example switched off at the wall) are marked.

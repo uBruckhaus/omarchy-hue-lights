@@ -5,7 +5,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui as Ui
 
-// Bar indicator for Philips Hue. Lit bulb in the accent colour while any light is on,
+// Bar indicator for Philips Hue. Lit bulb in the theme's green while any light is on,
 // dim bulb when all are off or no bridge is paired. Left click opens the panel; right
 // click switches every light off. All bridge traffic goes through scripts/hue-lights.py,
 // which receives JSON commands on stdin and streams JSON snapshots on stdout.
@@ -19,6 +19,17 @@ Ui.BarWidget {
   readonly property int onCount: Number(stats.on_count || 0)
   readonly property int lightCount: Number(stats.light_count || 0)
   readonly property bool anyOn: onCount > 0
+  // The theme's green (colors.toml), like the other running indicators in the bar.
+  property color green: "#66c98b"
+  FileView {
+    path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy/current/theme/colors.toml"
+    watchChanges: true
+    onFileChanged: reload()
+    onLoaded: {
+      var match = text().match(/^\s*green\s*=\s*"(#[0-9a-fA-F]{6})"/m)
+      if (match) root.green = match[1]
+    }
+  }
   readonly property string scriptDir: Qt.resolvedUrl("scripts").toString().replace(/^file:\/\//, "")
 
   readonly property string summary: {
@@ -89,7 +100,7 @@ Ui.BarWidget {
     bar: root.bar
     text: root.anyOn ? "󰛨" : "󰌵"
     dimmed: !root.anyOn
-    foreground: root.anyOn ? Color.accent : (root.bar ? root.bar.barForeground : Color.foreground)
+    foreground: root.anyOn ? root.green : (root.bar ? root.bar.barForeground : Color.foreground)
     tooltipText: root.opened ? "" : root.summary
     onPressed: function(code) {
       if (code === Qt.LeftButton) root.toggle()
