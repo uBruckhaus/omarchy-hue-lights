@@ -485,6 +485,9 @@ class Hue:
         self.on_count = 0
         self.phase = "connecting" if self.config else "unpaired"
         self.error = ""
+        # error_code/error_args let the panel show the message in its language.
+        self.error_code = ""
+        self.error_args = []
         self.candidates = []
         self.discovering = False
         self.pair_ip = ""
@@ -493,6 +496,12 @@ class Hue:
         self.last_sent = {"light": 0.0, "grouped_light": 0.0, "scene": 0.0}
         self.last_refresh = 0.0
         self.refresh_hold_until = 0.0
+
+    def set_error(self, code, text, *args):
+        """English message for logs and old panels, plus a code and arguments the panel translates."""
+        self.error = text % args if args else text
+        self.error_code = code
+        self.error_args = [str(a) for a in args]
 
     # -- output
     def snapshot(self):
@@ -503,6 +512,7 @@ class Hue:
                           "model": self.config.get("model", "")}
             return {
                 "phase": self.phase, "error": self.error, "bridge": bridge,
+                "error_code": self.error_code if self.error else "", "error_args": self.error_args if self.error else [],
                 "rooms": self.rooms, "light_count": self.light_count, "on_count": self.on_count,
                 "candidates": self.candidates, "discovering": self.discovering,
                 "pair_ip": self.pair_ip,
@@ -540,13 +550,16 @@ class Hue:
                 self.phase, self.error = "ok", ""
         except PinError:
             with self.lock:
-                self.phase, self.error = "error", "The bridge certificate changed. Unpair and pair again if you replaced the bridge."
+                self.phase = "error"
+                self.set_error("errCert", "The bridge certificate changed. Unpair and pair again if you replaced the bridge.")
         except PermissionError:
             with self.lock:
-                self.phase, self.error = "error", "The bridge no longer accepts this app. Unpair and pair again."
+                self.phase = "error"
+                self.set_error("errRejected", "The bridge no longer accepts this app. Unpair and pair again.")
         except (OSError, socket.timeout, http.client.HTTPException) as exc:
             with self.lock:
-                self.phase, self.error = "error", "Bridge not reachable (%s)" % clean(exc, 80)
+                self.phase = "error"
+                self.set_error("errUnreachable", "Bridge not reachable (%s)", clean(exc, 80))
             self.relocate()
         self.last_refresh = time.time()
 
@@ -584,7 +597,7 @@ class Hue:
             bridge_id = str((cfg or {}).get("bridgeid", "")).upper()
             if not BRIDGE_ID_RE.match(bridge_id) or peer[1] != bridge_id:
                 with self.lock:
-                    self.error = "%s does not look like a Hue bridge" % ip
+                    self.set_error("errNotHue", "%s does not look like a Hue bridge", ip)
                     self.pair_ip = ""
                     self.phase = "unpaired"
                 return
@@ -612,10 +625,10 @@ class Hue:
                     self.error = ""  # link button not pressed yet: keep asking
             else:
                 with self.lock:
-                    self.error = clean((entry.get("error") or {}).get("description") or "pairing failed", 80)
+                    self.set_error("errPairFailed", "Pairing failed: %s", clean((entry.get("error") or {}).get("description") or "?", 80))
         except (OSError, socket.timeout, http.client.HTTPException, PinError, ValueError) as exc:
             with self.lock:
-                self.error = "Cannot reach %s (%s)" % (ip, clean(exc, 60))
+                self.set_error("errCannotReach", "Cannot reach %s (%s)", ip, clean(exc, 60))
 
     # -- control commands
     def queue(self, kind, rid, body):
@@ -673,7 +686,7 @@ class Hue:
                 self.api("PUT", "/clip/v2/resource/%s/%s" % (kind, rid), body)
             except (OSError, PinError, PermissionError, socket.timeout, http.client.HTTPException) as exc:
                 with self.lock:
-                    self.error = "Command failed (%s)" % clean(exc, 60)
+                    self.set_error("errCommand", "Command failed (%s)", clean(exc, 60))
             self.last_sent[kind] = time.time()
             sent = True
         return sent
@@ -694,7 +707,7 @@ class Hue:
             ip = str(cmd.get("ip", "")).strip()
             if not valid_bridge_ip(ip):
                 with self.lock:
-                    self.error = "Enter the bridge's local IPv4 address"
+                    self.set_error("errEnterIp", "Enter the bridge's local IPv4 address")
                 self.emit()
                 return
             with self.lock:
@@ -752,7 +765,7 @@ class Hue:
                     with self.lock:
                         self.pair_ip = ""
                         self.phase = "unpaired"
-                        self.error = "No button press seen. Press the round button on the bridge, then try again."
+                        self.set_error("errNoPress", "No button press seen. Press the round button on the bridge, then try again.")
                 else:
                     self.try_pair()
                 self.emit()

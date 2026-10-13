@@ -9,6 +9,12 @@ Control your Philips Hue lights from the Omarchy bar. Switch rooms, zones and si
 - **Single lights and scenes:** click a room to expand it: every light with its colour, a brightness slider and a switch, then the room's scenes (the active one is highlighted).
 - **Unreachable lights** (for example switched off at the wall) are marked.
 
+## Languages and settings
+
+The interface is built in in eight languages: English, German (Deutsch), French (Français), Spanish (Español), Italian (Italiano), Portuguese (Português), Dutch (Nederlands) and Polish (Polski). It follows the system language (`LC_ALL`, `LC_MESSAGES`, `LANG`) and falls back to English. To pick another one, open the **gear (⚙)** at the top right of the panel → **Language**. The translations ship with the plugin: nothing is downloaded or generated, and the plugin makes no extra requests for them. The choice is stored in the widget's own entry in `~/.config/omarchy/shell.json` (`"language"`); **System (…)** removes it again.
+
+The settings page opens from the gear and closes with **← Back**, Backspace or Esc. It also shows the paired bridge and **Unpair**, which used to be in the main panel.
+
 ## Install
 
 Requires Omarchy's plugin-capable Quickshell, `python3` (standard library only, no extra packages) and `avahi-browse` (Avahi, installed on Omarchy) for finding the bridge. No setup script is needed, and the plugin never asks for root or administrator rights.
@@ -47,7 +53,7 @@ omarchy plugin disable ubruckhaus.hue-lights
 omarchy plugin remove ubruckhaus.hue-lights
 ```
 
-The plugin creates no services. The only file outside its folder is `~/.config/omarchy/hue-lights/config.json`. **Unpair** in the panel deletes it (or delete the directory yourself). To revoke the key on the bridge as well, remove the "omarchy_hue_lights" app in the Hue app under Settings > Apps.
+The plugin creates no services. The only file outside its folder is `~/.config/omarchy/hue-lights/config.json`. **Unpair** (gear ⚙ → Bridge) deletes it (or delete the directory yourself). To revoke the key on the bridge as well, remove the "omarchy_hue_lights" app in the Hue app under Settings > Apps.
 
 ## Development
 

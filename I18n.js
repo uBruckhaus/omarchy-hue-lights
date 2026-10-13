@@ -1,0 +1,481 @@
+.pragma library
+
+// Interface translations. All built in: nothing is
+// downloaded or generated. The language follows the system (LC_ALL,
+// LC_MESSAGES, LANG) unless one is picked in the editor; anything without a
+// translation falls back to English.
+
+var LANGUAGES = [
+  { code: "en", name: "English" },
+  { code: "de", name: "Deutsch" },
+  { code: "fr", name: "Français" },
+  { code: "es", name: "Español" },
+  { code: "it", name: "Italiano" },
+  { code: "pt", name: "Português" },
+  { code: "nl", name: "Nederlands" },
+  { code: "pl", name: "Polski" }
+]
+
+// "xx_YY.UTF-8" / "xx-YY" / "xx" -> "xx" when we have it, else "en".
+function systemLanguage(lcAll, lcMessages, lang) {
+  var values = [lcAll, lcMessages, lang]
+  for (var i = 0; i < values.length; i++) {
+    var code = String(values[i] || "").toLowerCase().split(/[_.@-]/)[0]
+    if (code === "c" || code === "posix" || code === "") continue
+    return supported(code) ? code : "en"
+  }
+  return "en"
+}
+
+function supported(code) {
+  for (var i = 0; i < LANGUAGES.length; i++) if (LANGUAGES[i].code === code) return true
+  return false
+}
+
+function languageName(code) {
+  for (var i = 0; i < LANGUAGES.length; i++) if (LANGUAGES[i].code === code) return LANGUAGES[i].name
+  return code
+}
+
+// The setting is "auto" (system) or a language code.
+function resolve(setting, systemCode) {
+  return setting && setting !== "auto" && supported(setting) ? setting : systemCode
+}
+
+function format(text, args) {
+  return String(text).replace(/\{(\d+)\}/g, function(match, index) {
+    var value = args && args[Number(index)]
+    return value === undefined || value === null ? match : String(value)
+  })
+}
+
+function tr(lang, key, args) {
+  var table = STRINGS[lang] || STRINGS.en
+  var text = table[key]
+  if (text === undefined) text = STRINGS.en[key]
+  if (text === undefined) return key
+  if (Array.isArray(text)) text = text[text.length - 1]
+  return format(text, args)
+}
+
+// Plural: entries are [one, other], or [one, few, many] for Polish.
+function trn(lang, key, n, args) {
+  var table = STRINGS[lang] || STRINGS.en
+  var forms = table[key] !== undefined ? table[key] : STRINGS.en[key]
+  if (forms === undefined) return key
+  if (!Array.isArray(forms)) return format(forms, [n].concat(args || []))
+  var index
+  if (lang === "pl" && forms.length === 3) {
+    var mod10 = n % 10, mod100 = n % 100
+    index = n === 1 ? 0 : (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) ? 1 : 2
+  } else if (lang === "fr" || lang === "pt") {
+    index = n <= 1 ? 0 : forms.length - 1
+  } else {
+    index = n === 1 ? 0 : forms.length - 1
+  }
+  return format(forms[index], [n].concat(args || []))
+}
+
+var STRINGS = {
+  en: {
+      "settings": "Settings",
+      "back": "Back",
+      "backTip": "Back (Backspace, Esc)",
+      "language": "Language",
+      "systemLanguage": "System ({0})",
+      "errPairFailed": "Pairing failed: {0}",
+      "errCannotReach": "Cannot reach {0} ({1})",
+      "errCommand": "Command failed ({0})",
+      "errEnterIp": "Enter the bridge's local IPv4 address",
+      "errNoPress": "No button press seen. Press the round button on the bridge, then try again.",
+      "noBridge": "No bridge paired",
+      "ofOn": "{0} of {1} on",
+      "pairHeader": "Pair a Hue bridge",
+      "pressNow": "Press the round link button on top of the bridge now. Waiting {0} s for {1} …",
+      "clickPair": "Click Pair, then press the round link button on top of the bridge within 30 seconds.",
+      "pair": "Pair",
+      "searching": "Searching the network for Hue bridges …",
+      "notFound": "No bridge found automatically. Enter its IP address:",
+      "ipPlaceholder": "Bridge IP, e.g. 192.168.178.106",
+      "searchAgain": "Search again",
+      "cancel": "Cancel",
+      "noLights": "No lights on this bridge yet.",
+      "connecting": "Connecting to the bridge …",
+      "zone": "Zone",
+      "offLights": [
+          "Off · 1 light",
+          "Off · {0} lights"
+      ],
+      "unreachableN": "{0} unreachable",
+      "unreachable": "unreachable",
+      "otherLights": "Other lights",
+      "recallScene": "Recall scene",
+      "less": "less",
+      "more": "+{0} more",
+      "allOff": "All off",
+      "allOffTip": "Switch every light off",
+      "refresh": "Refresh",
+      "bridge": "Bridge",
+      "reallyUnpair": "Really unpair?",
+      "unpair": "Unpair",
+      "unpairTip": "Forget this bridge and its app key on this PC",
+      "tipUnpaired": "No bridge paired yet: click to pair",
+      "tipUnreachable": "Bridge not reachable",
+      "rightClickOff": "Right click: all off",
+      "errCert": "The bridge certificate changed. Unpair and pair again if you replaced the bridge.",
+      "errRejected": "The bridge no longer accepts this app. Unpair and pair again.",
+      "errUnreachable": "Bridge not reachable ({0})",
+      "errNotHue": "{0} does not look like a Hue bridge"
+  },
+  de: {
+      "settings": "Einstellungen",
+      "back": "Zurück",
+      "backTip": "Zurück (Rücktaste, Esc)",
+      "language": "Sprache",
+      "systemLanguage": "System ({0})",
+      "errPairFailed": "Koppeln fehlgeschlagen: {0}",
+      "errCannotReach": "{0} nicht erreichbar ({1})",
+      "errCommand": "Befehl fehlgeschlagen ({0})",
+      "errEnterIp": "Die lokale IPv4-Adresse der Bridge eingeben",
+      "errNoPress": "Kein Tastendruck erkannt. Die runde Taste auf der Bridge drücken und erneut versuchen.",
+      "noBridge": "Keine Bridge gekoppelt",
+      "ofOn": "{0} von {1} an",
+      "pairHeader": "Hue Bridge koppeln",
+      "pressNow": "Jetzt die runde Link-Taste oben auf der Bridge drücken. Warte {0} s auf {1} …",
+      "clickPair": "Auf Koppeln klicken, dann innerhalb von 30 Sekunden die runde Link-Taste oben auf der Bridge drücken.",
+      "pair": "Koppeln",
+      "searching": "Suche im Netzwerk nach Hue Bridges …",
+      "notFound": "Keine Bridge automatisch gefunden. IP-Adresse eingeben:",
+      "ipPlaceholder": "Bridge-IP, z. B. 192.168.178.106",
+      "searchAgain": "Erneut suchen",
+      "cancel": "Abbrechen",
+      "noLights": "Noch keine Lampen an dieser Bridge.",
+      "connecting": "Verbinde mit der Bridge …",
+      "zone": "Zone",
+      "offLights": [
+          "Aus · 1 Lampe",
+          "Aus · {0} Lampen"
+      ],
+      "unreachableN": "{0} nicht erreichbar",
+      "unreachable": "nicht erreichbar",
+      "otherLights": "Weitere Lampen",
+      "recallScene": "Szene aufrufen",
+      "less": "weniger",
+      "more": "+{0} mehr",
+      "allOff": "Alle aus",
+      "allOffTip": "Alle Lampen ausschalten",
+      "refresh": "Aktualisieren",
+      "bridge": "Bridge",
+      "reallyUnpair": "Wirklich entkoppeln?",
+      "unpair": "Entkoppeln",
+      "unpairTip": "Diese Bridge und ihren App-Schlüssel auf diesem PC vergessen",
+      "tipUnpaired": "Noch keine Bridge gekoppelt: zum Koppeln klicken",
+      "tipUnreachable": "Bridge nicht erreichbar",
+      "rightClickOff": "Rechtsklick: alle aus",
+      "errCert": "Das Zertifikat der Bridge hat sich geändert. Wenn die Bridge ersetzt wurde: entkoppeln und neu koppeln.",
+      "errRejected": "Die Bridge akzeptiert diese App nicht mehr. Entkoppeln und neu koppeln.",
+      "errUnreachable": "Bridge nicht erreichbar ({0})",
+      "errNotHue": "{0} sieht nicht wie eine Hue Bridge aus"
+  },
+  fr: {
+      "settings": "Réglages",
+      "back": "Retour",
+      "backTip": "Retour (Retour arrière, Échap)",
+      "language": "Langue",
+      "systemLanguage": "Système ({0})",
+      "errPairFailed": "Échec de l’appairage : {0}",
+      "errCannotReach": "Impossible de joindre {0} ({1})",
+      "errCommand": "Échec de la commande ({0})",
+      "errEnterIp": "Saisissez l’adresse IPv4 locale du pont",
+      "errNoPress": "Aucun appui détecté. Appuyez sur le bouton rond du pont, puis réessayez.",
+      "noBridge": "Aucun pont appairé",
+      "ofOn": "{0} sur {1} allumées",
+      "pairHeader": "Appairer un pont Hue",
+      "pressNow": "Appuyez maintenant sur le bouton rond de liaison sur le pont. Attente {0} s pour {1} …",
+      "clickPair": "Cliquez sur Appairer, puis appuyez sur le bouton rond de liaison du pont dans les 30 secondes.",
+      "pair": "Appairer",
+      "searching": "Recherche de ponts Hue sur le réseau …",
+      "notFound": "Aucun pont trouvé automatiquement. Saisissez son adresse IP :",
+      "ipPlaceholder": "IP du pont, p. ex. 192.168.178.106",
+      "searchAgain": "Chercher à nouveau",
+      "cancel": "Annuler",
+      "noLights": "Pas encore de lampes sur ce pont.",
+      "connecting": "Connexion au pont …",
+      "zone": "Zone",
+      "offLights": [
+          "Éteint · 1 lampe",
+          "Éteint · {0} lampes"
+      ],
+      "unreachableN": "{0} injoignable(s)",
+      "unreachable": "injoignable",
+      "otherLights": "Autres lampes",
+      "recallScene": "Rappeler la scène",
+      "less": "moins",
+      "more": "+{0} de plus",
+      "allOff": "Tout éteindre",
+      "allOffTip": "Éteindre toutes les lampes",
+      "refresh": "Actualiser",
+      "bridge": "Pont",
+      "reallyUnpair": "Vraiment désappairer ?",
+      "unpair": "Désappairer",
+      "unpairTip": "Oublier ce pont et sa clé d’application sur ce PC",
+      "tipUnpaired": "Aucun pont appairé : cliquez pour appairer",
+      "tipUnreachable": "Pont injoignable",
+      "rightClickOff": "Clic droit : tout éteindre",
+      "errCert": "Le certificat du pont a changé. Si vous avez remplacé le pont, désappairez puis appairez à nouveau.",
+      "errRejected": "Le pont n’accepte plus cette application. Désappairez puis appairez à nouveau.",
+      "errUnreachable": "Pont injoignable ({0})",
+      "errNotHue": "{0} ne ressemble pas à un pont Hue"
+  },
+  es: {
+      "settings": "Ajustes",
+      "back": "Atrás",
+      "backTip": "Atrás (Retroceso, Esc)",
+      "language": "Idioma",
+      "systemLanguage": "Sistema ({0})",
+      "errPairFailed": "Error al vincular: {0}",
+      "errCannotReach": "No se puede conectar con {0} ({1})",
+      "errCommand": "Falló la orden ({0})",
+      "errEnterIp": "Introduce la dirección IPv4 local del puente",
+      "errNoPress": "No se detectó ninguna pulsación. Pulsa el botón redondo del puente e inténtalo de nuevo.",
+      "noBridge": "Ningún puente vinculado",
+      "ofOn": "{0} de {1} encendidas",
+      "pairHeader": "Vincular un puente Hue",
+      "pressNow": "Pulsa ahora el botón redondo de enlace del puente. Esperando {0} s a {1} …",
+      "clickPair": "Haz clic en Vincular y pulsa el botón redondo de enlace del puente en 30 segundos.",
+      "pair": "Vincular",
+      "searching": "Buscando puentes Hue en la red …",
+      "notFound": "No se encontró ningún puente. Introduce su dirección IP:",
+      "ipPlaceholder": "IP del puente, p. ej. 192.168.178.106",
+      "searchAgain": "Buscar de nuevo",
+      "cancel": "Cancelar",
+      "noLights": "Aún no hay luces en este puente.",
+      "connecting": "Conectando con el puente …",
+      "zone": "Zona",
+      "offLights": [
+          "Apagado · 1 luz",
+          "Apagado · {0} luces"
+      ],
+      "unreachableN": "{0} inaccesibles",
+      "unreachable": "inaccesible",
+      "otherLights": "Otras luces",
+      "recallScene": "Activar escena",
+      "less": "menos",
+      "more": "+{0} más",
+      "allOff": "Apagar todo",
+      "allOffTip": "Apagar todas las luces",
+      "refresh": "Actualizar",
+      "bridge": "Puente",
+      "reallyUnpair": "¿Seguro que quieres desvincular?",
+      "unpair": "Desvincular",
+      "unpairTip": "Olvidar este puente y su clave de app en este PC",
+      "tipUnpaired": "Ningún puente vinculado: haz clic para vincular",
+      "tipUnreachable": "Puente inaccesible",
+      "rightClickOff": "Clic derecho: apagar todo",
+      "errCert": "El certificado del puente cambió. Si lo sustituiste, desvincúlalo y vuelve a vincularlo.",
+      "errRejected": "El puente ya no acepta esta app. Desvincula y vuelve a vincular.",
+      "errUnreachable": "Puente inaccesible ({0})",
+      "errNotHue": "{0} no parece un puente Hue"
+  },
+  it: {
+      "settings": "Impostazioni",
+      "back": "Indietro",
+      "backTip": "Indietro (Backspace, Esc)",
+      "language": "Lingua",
+      "systemLanguage": "Sistema ({0})",
+      "errPairFailed": "Associazione non riuscita: {0}",
+      "errCannotReach": "Impossibile raggiungere {0} ({1})",
+      "errCommand": "Comando non riuscito ({0})",
+      "errEnterIp": "Inserisci l’indirizzo IPv4 locale del bridge",
+      "errNoPress": "Nessuna pressione rilevata. Premi il pulsante rotondo sul bridge e riprova.",
+      "noBridge": "Nessun bridge associato",
+      "ofOn": "{0} di {1} accese",
+      "pairHeader": "Associa un bridge Hue",
+      "pressNow": "Premi ora il pulsante rotondo di collegamento sul bridge. Attesa {0} s per {1} …",
+      "clickPair": "Fai clic su Associa, poi premi entro 30 secondi il pulsante rotondo di collegamento sul bridge.",
+      "pair": "Associa",
+      "searching": "Ricerca di bridge Hue nella rete …",
+      "notFound": "Nessun bridge trovato automaticamente. Inserisci il suo indirizzo IP:",
+      "ipPlaceholder": "IP del bridge, es. 192.168.178.106",
+      "searchAgain": "Cerca di nuovo",
+      "cancel": "Annulla",
+      "noLights": "Ancora nessuna luce su questo bridge.",
+      "connecting": "Connessione al bridge …",
+      "zone": "Zona",
+      "offLights": [
+          "Spento · 1 luce",
+          "Spento · {0} luci"
+      ],
+      "unreachableN": "{0} non raggiungibili",
+      "unreachable": "non raggiungibile",
+      "otherLights": "Altre luci",
+      "recallScene": "Richiama scena",
+      "less": "meno",
+      "more": "+{0} altre",
+      "allOff": "Spegni tutto",
+      "allOffTip": "Spegni tutte le luci",
+      "refresh": "Aggiorna",
+      "bridge": "Bridge",
+      "reallyUnpair": "Dissociare davvero?",
+      "unpair": "Dissocia",
+      "unpairTip": "Dimentica questo bridge e la sua chiave app su questo PC",
+      "tipUnpaired": "Nessun bridge associato: fai clic per associare",
+      "tipUnreachable": "Bridge non raggiungibile",
+      "rightClickOff": "Clic destro: spegni tutto",
+      "errCert": "Il certificato del bridge è cambiato. Se hai sostituito il bridge, dissocia e associa di nuovo.",
+      "errRejected": "Il bridge non accetta più questa app. Dissocia e associa di nuovo.",
+      "errUnreachable": "Bridge non raggiungibile ({0})",
+      "errNotHue": "{0} non sembra un bridge Hue"
+  },
+  pt: {
+      "settings": "Configurações",
+      "back": "Voltar",
+      "backTip": "Voltar (Backspace, Esc)",
+      "language": "Idioma",
+      "systemLanguage": "Sistema ({0})",
+      "errPairFailed": "Falha ao parear: {0}",
+      "errCannotReach": "Não foi possível alcançar {0} ({1})",
+      "errCommand": "Comando falhou ({0})",
+      "errEnterIp": "Digite o endereço IPv4 local da bridge",
+      "errNoPress": "Nenhum toque detectado. Aperte o botão redondo da bridge e tente de novo.",
+      "noBridge": "Nenhuma bridge pareada",
+      "ofOn": "{0} de {1} acesas",
+      "pairHeader": "Parear uma bridge Hue",
+      "pressNow": "Aperte agora o botão redondo de link em cima da bridge. Aguardando {0} s por {1} …",
+      "clickPair": "Clique em Parear e aperte o botão redondo de link da bridge em até 30 segundos.",
+      "pair": "Parear",
+      "searching": "Procurando bridges Hue na rede …",
+      "notFound": "Nenhuma bridge encontrada automaticamente. Digite o endereço IP:",
+      "ipPlaceholder": "IP da bridge, ex. 192.168.178.106",
+      "searchAgain": "Procurar de novo",
+      "cancel": "Cancelar",
+      "noLights": "Ainda não há lâmpadas nesta bridge.",
+      "connecting": "Conectando à bridge …",
+      "zone": "Zona",
+      "offLights": [
+          "Desligado · 1 lâmpada",
+          "Desligado · {0} lâmpadas"
+      ],
+      "unreachableN": "{0} inacessíveis",
+      "unreachable": "inacessível",
+      "otherLights": "Outras lâmpadas",
+      "recallScene": "Ativar cena",
+      "less": "menos",
+      "more": "+{0} mais",
+      "allOff": "Desligar tudo",
+      "allOffTip": "Desligar todas as lâmpadas",
+      "refresh": "Atualizar",
+      "bridge": "Bridge",
+      "reallyUnpair": "Desparear mesmo?",
+      "unpair": "Desparear",
+      "unpairTip": "Esquecer esta bridge e a chave do app neste PC",
+      "tipUnpaired": "Nenhuma bridge pareada: clique para parear",
+      "tipUnreachable": "Bridge inacessível",
+      "rightClickOff": "Clique direito: desligar tudo",
+      "errCert": "O certificado da bridge mudou. Se você trocou a bridge, despareie e pareie de novo.",
+      "errRejected": "A bridge não aceita mais este app. Despareie e pareie de novo.",
+      "errUnreachable": "Bridge inacessível ({0})",
+      "errNotHue": "{0} não parece uma bridge Hue"
+  },
+  nl: {
+      "settings": "Instellingen",
+      "back": "Terug",
+      "backTip": "Terug (Backspace, Esc)",
+      "language": "Taal",
+      "systemLanguage": "Systeem ({0})",
+      "errPairFailed": "Koppelen mislukt: {0}",
+      "errCannotReach": "{0} niet bereikbaar ({1})",
+      "errCommand": "Opdracht mislukt ({0})",
+      "errEnterIp": "Voer het lokale IPv4-adres van de bridge in",
+      "errNoPress": "Geen knopdruk gezien. Druk op de ronde knop van de bridge en probeer het opnieuw.",
+      "noBridge": "Geen bridge gekoppeld",
+      "ofOn": "{0} van {1} aan",
+      "pairHeader": "Hue-bridge koppelen",
+      "pressNow": "Druk nu op de ronde linkknop boven op de bridge. Wacht {0} s op {1} …",
+      "clickPair": "Klik op Koppelen en druk binnen 30 seconden op de ronde linkknop boven op de bridge.",
+      "pair": "Koppelen",
+      "searching": "Netwerk wordt doorzocht naar Hue-bridges …",
+      "notFound": "Geen bridge automatisch gevonden. Voer het IP-adres in:",
+      "ipPlaceholder": "Bridge-IP, bijv. 192.168.178.106",
+      "searchAgain": "Opnieuw zoeken",
+      "cancel": "Annuleren",
+      "noLights": "Nog geen lampen op deze bridge.",
+      "connecting": "Verbinden met de bridge …",
+      "zone": "Zone",
+      "offLights": [
+          "Uit · 1 lamp",
+          "Uit · {0} lampen"
+      ],
+      "unreachableN": "{0} onbereikbaar",
+      "unreachable": "onbereikbaar",
+      "otherLights": "Overige lampen",
+      "recallScene": "Scène oproepen",
+      "less": "minder",
+      "more": "+{0} meer",
+      "allOff": "Alles uit",
+      "allOffTip": "Alle lampen uitzetten",
+      "refresh": "Vernieuwen",
+      "bridge": "Bridge",
+      "reallyUnpair": "Echt ontkoppelen?",
+      "unpair": "Ontkoppelen",
+      "unpairTip": "Deze bridge en de app-sleutel op deze pc vergeten",
+      "tipUnpaired": "Nog geen bridge gekoppeld: klik om te koppelen",
+      "tipUnreachable": "Bridge onbereikbaar",
+      "rightClickOff": "Rechtsklik: alles uit",
+      "errCert": "Het certificaat van de bridge is veranderd. Ontkoppel en koppel opnieuw als je de bridge hebt vervangen.",
+      "errRejected": "De bridge accepteert deze app niet meer. Ontkoppel en koppel opnieuw.",
+      "errUnreachable": "Bridge onbereikbaar ({0})",
+      "errNotHue": "{0} lijkt geen Hue-bridge"
+  },
+  pl: {
+      "settings": "Ustawienia",
+      "back": "Wstecz",
+      "backTip": "Wstecz (Backspace, Esc)",
+      "language": "Język",
+      "systemLanguage": "Systemowy ({0})",
+      "errPairFailed": "Parowanie nie powiodło się: {0}",
+      "errCannotReach": "Nie można połączyć z {0} ({1})",
+      "errCommand": "Polecenie nie powiodło się ({0})",
+      "errEnterIp": "Wpisz lokalny adres IPv4 mostka",
+      "errNoPress": "Nie wykryto naciśnięcia. Naciśnij okrągły przycisk na mostku i spróbuj ponownie.",
+      "noBridge": "Brak sparowanego mostka",
+      "ofOn": "Włączone: {0} z {1}",
+      "pairHeader": "Sparuj mostek Hue",
+      "pressNow": "Naciśnij teraz okrągły przycisk łączenia na mostku. Czekam {0} s na {1} …",
+      "clickPair": "Kliknij Sparuj, a potem w ciągu 30 sekund naciśnij okrągły przycisk łączenia na mostku.",
+      "pair": "Sparuj",
+      "searching": "Szukanie mostków Hue w sieci …",
+      "notFound": "Nie znaleziono mostka automatycznie. Wpisz jego adres IP:",
+      "ipPlaceholder": "IP mostka, np. 192.168.178.106",
+      "searchAgain": "Szukaj ponownie",
+      "cancel": "Anuluj",
+      "noLights": "Na tym mostku nie ma jeszcze lamp.",
+      "connecting": "Łączenie z mostkiem …",
+      "zone": "Strefa",
+      "offLights": [
+          "Wył. · 1 lampa",
+          "Wył. · {0} lampy",
+          "Wył. · {0} lamp"
+      ],
+      "unreachableN": "Nieosiągalne: {0}",
+      "unreachable": "nieosiągalna",
+      "otherLights": "Inne lampy",
+      "recallScene": "Włącz scenę",
+      "less": "mniej",
+      "more": "+{0} więcej",
+      "allOff": "Wyłącz wszystko",
+      "allOffTip": "Wyłącz wszystkie lampy",
+      "refresh": "Odśwież",
+      "bridge": "Mostek",
+      "reallyUnpair": "Na pewno rozparować?",
+      "unpair": "Rozparuj",
+      "unpairTip": "Zapomnij ten mostek i jego klucz aplikacji na tym komputerze",
+      "tipUnpaired": "Brak sparowanego mostka: kliknij, aby sparować",
+      "tipUnreachable": "Mostek nieosiągalny",
+      "rightClickOff": "Prawy klik: wyłącz wszystko",
+      "errCert": "Certyfikat mostka się zmienił. Jeśli wymieniono mostek, rozparuj i sparuj ponownie.",
+      "errRejected": "Mostek nie akceptuje już tej aplikacji. Rozparuj i sparuj ponownie.",
+      "errUnreachable": "Mostek nieosiągalny ({0})",
+      "errNotHue": "{0} nie wygląda na mostek Hue"
+  }
+}

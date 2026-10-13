@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui as Ui
+import "I18n.js" as I18n
 
 // Bar indicator for Philips Hue. Lit bulb in the theme's green while any light is on,
 // dim bulb when all are off or no bridge is paired. Left click opens the panel; right
@@ -12,6 +13,20 @@ import qs.Ui as Ui
 Ui.BarWidget {
   id: root
   moduleName: "ubruckhaus.hue-lights"
+
+  // Interface language: the system's unless one is picked in the panel's
+  // settings (stored in this widget's own shell.json entry).
+  readonly property string systemLang: I18n.systemLanguage(Quickshell.env("LC_ALL"), Quickshell.env("LC_MESSAGES"), Quickshell.env("LANG"))
+  readonly property string languageSetting: String(root.setting("language", "auto"))
+  readonly property string lang: I18n.resolve(languageSetting, systemLang)
+  function t(key, args) { return I18n.tr(lang, key, args) }
+  function setLanguage(code) {
+    if (!root.bar || !root.bar.shell || typeof root.bar.shell.updateEntryInline !== "function") return
+    var next = Object.assign({}, root.settings || {})
+    if (code === "auto") delete next.language
+    else next.language = code
+    root.bar.shell.updateEntryInline(root.moduleName, next)
+  }
 
   property var stats: ({})
   // Push every snapshot into the panel; never let it read from an older widget instance.
@@ -33,16 +48,22 @@ Ui.BarWidget {
   readonly property string scriptDir: Qt.resolvedUrl("scripts").toString().replace(/^file:\/\//, "")
 
   readonly property string summary: {
-    if (stats.phase === "unpaired" || stats.phase === "pairing") return "Hue Lights\nNo bridge paired yet: click to pair"
-    if (stats.phase === "error") return "Hue Lights\n" + (stats.error || "Bridge not reachable")
-    var lines = ["Hue Lights · " + onCount + " of " + lightCount + " on"]
+    if (stats.phase === "unpaired" || stats.phase === "pairing") return "Hue Lights\n" + t("tipUnpaired")
+    if (stats.phase === "error") return "Hue Lights\n" + (errorText() || t("tipUnreachable"))
+    var lines = ["Hue Lights · " + t("ofOn", [onCount, lightCount])]
     var rooms = stats.rooms || []
     for (var i = 0; i < rooms.length; i++) {
       if (rooms[i].kind === "room" || rooms[i].kind === "other")
-        lines.push((rooms[i].on ? "● " : "○ ") + rooms[i].name + (rooms[i].on ? "  " + Math.round(rooms[i].bri) + "%" : ""))
+        lines.push((rooms[i].on ? "● " : "○ ") + (rooms[i].kind === "other" ? t("otherLights") : rooms[i].name) + (rooms[i].on ? "  " + Math.round(rooms[i].bri) + "%" : ""))
     }
-    if (anyOn) lines.push("Right click: all off")
+    if (anyOn) lines.push(t("rightClickOff"))
     return lines.join("\n")
+  }
+
+  // The helper's error in the interface language (older helpers send text only).
+  function errorText() {
+    if (!stats.error) return ""
+    return stats.error_code ? t(stats.error_code, stats.error_args || []) : String(stats.error)
   }
 
   function send(obj) {
