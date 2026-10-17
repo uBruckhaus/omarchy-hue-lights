@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Single-line text field driven by key events only (copied from the hardened field in
@@ -25,8 +26,8 @@ FocusScope {
   property int maximumLength: 4096
   property int cursorPosition: text.length
   property var pasteHandler: null
-  property color foreground: Color.foreground
-  property color accent: Color.accent
+  property color foreground: Commons.Color.foreground
+  property color accent: Commons.Color.accent
   property real horizontalPadding: Style.spacing.controlPaddingX
   property real verticalPadding: Style.spacing.inputPaddingY
   property bool hasCursor: false

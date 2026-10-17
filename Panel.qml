@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "I18n.js" as I18n
 
@@ -34,7 +35,7 @@ Panel {
   function t(key, args) { return I18n.tr(lang, key, args) }
   function tn(key, n, args) { return I18n.trn(lang, key, n, args) }
   readonly property real maxRoomListHeight: Style.space(520)
-  readonly property color fg: Color.popups.text
+  readonly property color fg: Commons.Color.popups.text
   readonly property color dim: Qt.darker(fg, 1.45)
   readonly property string font: root.bar ? root.bar.fontFamily : Style.font.family
 
@@ -184,7 +185,7 @@ Panel {
               Text {
                 textFormat: Text.PlainText
                 text: Number(root.stats.on_count || 0) > 0 ? "󰛨" : "󰌵"
-                color: Number(root.stats.on_count || 0) > 0 ? Color.accent : root.dim
+                color: Number(root.stats.on_count || 0) > 0 ? Commons.Color.accent : root.dim
                 font.family: root.font
                 font.pixelSize: Style.font.display
               }
@@ -197,7 +198,7 @@ Panel {
             width: parent.width
             wrapMode: Text.WordWrap
             text: root.hostWidget ? root.hostWidget.errorText() : String(root.stats.error || "")
-            color: Color.urgent
+            color: Commons.Color.urgent
             font.family: root.font
             font.pixelSize: Style.font.caption
           }
@@ -302,7 +303,7 @@ Panel {
                 text: root.confirmUnpair ? root.t("reallyUnpair") : root.t("unpair")
                 iconText: "󰌸"
                 bordered: true
-                foreground: root.confirmUnpair ? Color.urgent : root.fg
+                foreground: root.confirmUnpair ? Commons.Color.urgent : root.fg
                 fontFamily: root.font
                 tooltipText: root.t("unpairTip")
                 onClicked: {
@@ -476,7 +477,7 @@ Panel {
                     readonly property bool isOpen: root.expanded[root.roomKey(room)] === true
                     property bool allScenes: false
                     readonly property bool lit: room.on === true
-                    readonly property color tint: lit ? (room.color || Color.accent) : root.fg
+                    readonly property color tint: lit ? (room.color || Commons.Color.accent) : root.fg
                     readonly property real pad: Style.space(10)
                     readonly property int unreachable: {
                       var n = 0
@@ -586,7 +587,7 @@ Panel {
                           cursorRing: false
                           checked: roomBlock.lit
                           foreground: root.fg
-                          accent: roomBlock.lit ? roomBlock.tint : Color.accent
+                          accent: roomBlock.lit ? roomBlock.tint : Commons.Color.accent
                           onToggled: root.setRoom(roomBlock.room, { on: !roomBlock.lit })
                         }
                       }
@@ -699,7 +700,7 @@ Panel {
                             trackHeight: Style.space(16)
                             checked: lightRow.lightOn
                             foreground: root.fg
-                            accent: lightRow.lightOn ? lightRow.light.color : Color.accent
+                            accent: lightRow.lightOn ? lightRow.light.color : Commons.Color.accent
                             onToggled: root.send({ cmd: "light", id: lightRow.light.id, on: !lightRow.lightOn })
                           }
                         }

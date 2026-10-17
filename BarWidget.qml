@@ -3,6 +3,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "I18n.js" as I18n
 
@@ -121,7 +122,7 @@ Ui.BarWidget {
     bar: root.bar
     text: root.anyOn ? "󰛨" : "󰌵"
     dimmed: !root.anyOn
-    foreground: root.anyOn ? root.green : (root.bar ? root.bar.barForeground : Color.foreground)
+    foreground: root.anyOn ? root.green : (root.bar ? root.bar.barForeground : Commons.Color.foreground)
     tooltipText: root.opened ? "" : root.summary
     onPressed: function(code) {
       if (code === Qt.LeftButton) root.toggle()
