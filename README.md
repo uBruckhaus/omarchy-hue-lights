@@ -15,6 +15,8 @@ The interface is built in in eight languages: English, German (Deutsch), French 
 
 The settings page opens from the gear and closes with **← Back**, Backspace or Esc. It also shows the paired bridge and **Unpair**, which used to be in the main panel.
 
+The **ⓘ** button beside the gear opens an **Information** page with a card for each of the author's other plugins in the Omarchy Plugin Marketplace, with a short description in the panel's language. A click on a card opens that plugin's marketplace page in the browser (a fixed `https://plugins.omarchy.org/plugin.html?id=…` address); nothing is downloaded. **← Back**, Backspace or Esc returns.
+
 ## Install
 
 Requires Omarchy's plugin-capable Quickshell, `python3` (standard library only, no extra packages) and `avahi-browse` (Avahi, installed on Omarchy) for finding the bridge. No setup script is needed, and the plugin never asks for root or administrator rights.
