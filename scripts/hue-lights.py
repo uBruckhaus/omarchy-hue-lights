@@ -37,6 +37,11 @@ GROUP_INTERVAL = 0.6  # ... and ~1 group command per second
 HTTP_TIMEOUT = 4.0     # overall deadline per request: connect, TLS, headers and body
 MAX_BODY = 4 * 1024 * 1024
 MAX_CONFIG = 64 * 1024
+# Rooms and zones name their lights directly or through devices, and nothing stops
+# a bridge from repeating them: each group keeps a light once and at most
+# MAX_GROUP_LIGHTS of them, all groups together at most MAX_MEMBERSHIPS.
+MAX_GROUP_LIGHTS = 150
+MAX_MEMBERSHIPS = 1000
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 BRIDGE_ID_RE = re.compile(r"^[0-9A-F]{16}$")
@@ -197,17 +202,38 @@ def build_model(resources):
             "reachable": connectivity.get(owner, True),
         }
 
+    device_lights = {}   # each device's light services, once and capped
+    for did, device in devices.items():
+        found = {}
+        for svc in device.get("services") or []:
+            if isinstance(svc, dict) and svc.get("rtype") == "light" and svc.get("rid") in lights:
+                found[svc["rid"]] = None
+                if len(found) >= MAX_GROUP_LIGHTS:
+                    break
+        device_lights[did] = list(found)
+    budget = [MAX_MEMBERSHIPS]
+
     def lights_of(group):
-        ids = []
+        ids = {}   # insertion-ordered set
+        limit = min(MAX_GROUP_LIGHTS, budget[0])
+
+        def add(rid):
+            if rid in lights and rid not in ids and len(ids) < limit:
+                ids[rid] = None
+
         for child in group.get("children") or []:
+            if len(ids) >= limit:
+                break
+            if not isinstance(child, dict):
+                continue
             rid, rtype = child.get("rid"), child.get("rtype")
-            if rtype == "light" and rid in lights:
-                ids.append(rid)
-            elif rtype == "device" and rid in devices:
-                for svc in devices[rid].get("services") or []:
-                    if svc.get("rtype") == "light" and svc.get("rid") in lights:
-                        ids.append(svc["rid"])
-        return ids
+            if rtype == "light":
+                add(rid)
+            elif rtype == "device":
+                for lid in device_lights.get(rid, ()):
+                    add(lid)
+        budget[0] -= len(ids)
+        return list(ids)
 
     scenes_by_group = {}
     for scene in by_type.get("scene", []):

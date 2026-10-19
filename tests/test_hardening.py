@@ -231,6 +231,33 @@ class TextTests(unittest.TestCase):
         self.assertEqual(total, 1)
         self.assertNotIn("<", rooms[0]["lights"][0]["name"])
 
+    def test_repeated_room_members_stay_bounded(self):
+        """A bridge listing one device in many rooms, with a long repeated light-service list."""
+        uid = lambda n: "%08x-1111-1111-1111-111111111111" % n
+        light, device = uid(1), uid(2)
+        services = [{"rtype": "light", "rid": light}] * 20000
+        resources = [{"id": light, "type": "light", "metadata": {"name": "L"}, "on": {"on": True}},
+                     {"id": device, "type": "device", "services": services}]
+        resources += [{"id": uid(100 + n), "type": "room", "metadata": {"name": "R%d" % n},
+                       "children": [{"rtype": "device", "rid": device}] * 50 + [{"rtype": "light", "rid": light}] * 50}
+                      for n in range(2000)]
+        start = time.monotonic()
+        rooms, total, _ = hue.build_model(resources)
+        self.assertLess(time.monotonic() - start, 2)
+        self.assertEqual(total, 1)
+        self.assertTrue(all(len(room["lights"]) == 1 for room in rooms))
+        self.assertLessEqual(sum(len(room["lights"]) for room in rooms), hue.MAX_MEMBERSHIPS)
+
+    def test_many_lights_per_room_capped(self):
+        uid = lambda n: "%08x-1111-1111-1111-111111111111" % n
+        lights = [{"id": uid(n), "type": "light", "metadata": {"name": "L"}, "on": {"on": False}} for n in range(1, 400)]
+        rooms = [{"id": uid(10000 + n), "type": "zone", "children": [{"rtype": "light", "rid": l["id"]} for l in lights]}
+                 for n in range(20)] + [{"id": uid(20000), "type": "room", "children": ["x", None, {"rtype": "device", "rid": 5}]}]
+        built, _, _ = hue.build_model(lights + rooms)
+        zones = [room for room in built if room["kind"] == "zone"]
+        self.assertTrue(all(len(room["lights"]) <= hue.MAX_GROUP_LIGHTS for room in zones))
+        self.assertLessEqual(sum(len(room["lights"]) for room in zones), hue.MAX_MEMBERSHIPS)
+
     def test_bounded_command_output(self):
         out = hue.run_bounded(["yes"], timeout=2, max_bytes=1000)
         self.assertLessEqual(len(out), 1000)
