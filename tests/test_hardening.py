@@ -258,6 +258,37 @@ class TextTests(unittest.TestCase):
         self.assertTrue(all(len(room["lights"]) <= hue.MAX_GROUP_LIGHTS for room in zones))
         self.assertLessEqual(sum(len(room["lights"]) for room in zones), hue.MAX_MEMBERSHIPS)
 
+    def test_repeated_groups_and_scenes_stay_bounded(self):
+        """Many scenes for one room, the room ID repeated thousands of times, scene IDs repeated."""
+        uid = lambda n: "%08x-1111-1111-1111-111111111111" % n
+        light, room = uid(1), uid(2)
+        resources = [{"id": light, "type": "light", "metadata": {"name": "L"}, "on": {"on": True}}]
+        resources += [{"id": room, "type": kind, "metadata": {"name": "R"}, "children": [{"rtype": "light", "rid": light}]}
+                      for kind in ("room", "zone") for _ in range(3000)]
+        resources += [{"id": uid(1000 + n), "type": "scene", "metadata": {"name": "S%d" % n}, "group": {"rid": room}}
+                      for n in range(20000)]
+        resources += [{"id": uid(1000), "type": "scene", "group": {"rid": room}}] * 20000
+        resources += [{"id": uid(90000 + n), "type": "scene", "group": {"rid": uid(50000 + n % 500)}} for n in range(5000)]
+        resources += [{"id": uid(99999), "type": "scene", "group": "x"}, {"id": uid(99998), "type": "scene", "group": {"rid": 5}}]
+        start = time.monotonic()
+        rooms, _, _ = hue.build_model(resources)
+        self.assertLess(time.monotonic() - start, 2)
+        self.assertEqual([r["id"] for r in rooms if r["kind"] != "other"], [room])
+        scenes = rooms[0]["scenes"]
+        self.assertEqual(len(scenes), hue.MAX_GROUP_SCENES)
+        self.assertEqual(len({s["id"] for s in scenes}), len(scenes))
+        self.assertEqual(scenes, sorted(scenes, key=lambda s: s["name"].lower()))
+        self.assertLess(len(hue.json.dumps(rooms)), 64 * 1024)
+
+    def test_scene_total_capped(self):
+        uid = lambda n: "%08x-1111-1111-1111-111111111111" % n
+        lights = [{"id": uid(n), "type": "light", "metadata": {"name": "L"}} for n in range(1, 41)]
+        groups = [{"id": uid(1000 + n), "type": "room", "children": [{"rtype": "light", "rid": uid(n + 1)}]} for n in range(40)]
+        scenes = [{"id": uid(100000 + n), "type": "scene", "group": {"rid": uid(1000 + n % 40)}} for n in range(10000)]
+        rooms, _, _ = hue.build_model(lights + groups + scenes)
+        self.assertLessEqual(sum(len(r["scenes"]) for r in rooms), hue.MAX_SCENES)
+        self.assertTrue(all(len(r["scenes"]) <= hue.MAX_GROUP_SCENES for r in rooms))
+
     def test_bounded_command_output(self):
         out = hue.run_bounded(["yes"], timeout=2, max_bytes=1000)
         self.assertLessEqual(len(out), 1000)

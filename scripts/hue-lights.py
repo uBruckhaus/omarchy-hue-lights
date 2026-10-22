@@ -42,6 +42,11 @@ MAX_CONFIG = 64 * 1024
 # MAX_GROUP_LIGHTS of them, all groups together at most MAX_MEMBERSHIPS.
 MAX_GROUP_LIGHTS = 150
 MAX_MEMBERSHIPS = 1000
+# Each room or zone ID is shown once. Scenes are kept once per ID, at most
+# MAX_GROUP_SCENES per group and MAX_SCENES on the whole bridge, and every scene
+# goes to the one group it names, so the model never holds more than MAX_SCENES.
+MAX_GROUP_SCENES = 100
+MAX_SCENES = 1000
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 BRIDGE_ID_RE = re.compile(r"^[0-9A-F]{16}$")
@@ -236,20 +241,33 @@ def build_model(resources):
         return list(ids)
 
     scenes_by_group = {}
+    seen_scenes = set()
     for scene in by_type.get("scene", []):
-        gid = (scene.get("group") or {}).get("rid")
-        if not valid_uuid(scene.get("id")) or not gid:
+        if len(seen_scenes) >= MAX_SCENES:
+            break
+        gid = ((scene.get("group") if isinstance(scene.get("group"), dict) else None) or {}).get("rid")
+        if not valid_uuid(scene.get("id")) or not valid_uuid(gid) or scene["id"] in seen_scenes:
             continue
-        scenes_by_group.setdefault(gid, []).append({
+        group_scenes = scenes_by_group.setdefault(gid, [])
+        if len(group_scenes) >= MAX_GROUP_SCENES:
+            continue
+        seen_scenes.add(scene["id"])
+        group_scenes.append({
             "id": scene["id"],
             "name": clean((scene.get("metadata") or {}).get("name") or "Scene", 30),
             "active": (scene.get("status") or {}).get("active", "inactive") != "inactive",
         })
+    for group_scenes in scenes_by_group.values():
+        group_scenes.sort(key=lambda s: s["name"].lower())
 
     rooms = []
     assigned = set()
+    seen_groups = set()
     for kind in ("room", "zone"):
         for group in by_type.get(kind, []):
+            if not valid_uuid(group.get("id")) or group["id"] in seen_groups:
+                continue
+            seen_groups.add(group["id"])
             gl_id = None
             for svc in group.get("services") or []:
                 if svc.get("rtype") == "grouped_light" and svc.get("rid") in grouped:
@@ -276,7 +294,7 @@ def build_model(resources):
                 "archetype": clean((group.get("metadata") or {}).get("archetype") or "", 30),
                 "color": blend_colors([l["color"] for l in on_members]),
                 "lights": members,
-                "scenes": sorted(scenes_by_group.get(group["id"], []), key=lambda s: s["name"].lower()),
+                "scenes": scenes_by_group.pop(group["id"], []),
             })
     loose = [light_entry(l) for lid, l in lights.items() if lid not in assigned]
     if loose:
