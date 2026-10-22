@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ubruckhaus.hue-lights",
   "name": "Hue Lights",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "author": "uBruckhaus",
   "description": "Control your Philips Hue lights from the bar: rooms and single lights on/off, brightness and scenes, straight over your local Hue bridge (no cloud, pinned HTTPS).",
   "kinds": [

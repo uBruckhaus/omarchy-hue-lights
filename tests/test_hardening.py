@@ -289,6 +289,48 @@ class TextTests(unittest.TestCase):
         self.assertLessEqual(sum(len(r["scenes"]) for r in rooms), hue.MAX_SCENES)
         self.assertTrue(all(len(r["scenes"]) <= hue.MAX_GROUP_SCENES for r in rooms))
 
+    def test_lights_in_no_room_stay_bounded(self):
+        """Thousands of lights a bridge puts in no room: "Other lights" has the same limits."""
+        uid = lambda n: "%08x-1111-1111-1111-111111111111" % n
+        lights = [{"id": uid(n), "type": "light", "metadata": {"name": "L"}, "on": {"on": True}} for n in range(1, 20001)]
+        rooms = [{"id": uid(100000 + n), "type": "room", "children": [{"rtype": "light", "rid": uid(m)}
+                                                                      for m in range(1 + n * 150, 151 + n * 150)]}
+                 for n in range(10)]
+        start = time.monotonic()
+        built, total, _ = hue.build_model(lights + rooms)
+        self.assertLess(time.monotonic() - start, 2)
+        other = [r for r in built if r["kind"] == "other"]
+        self.assertTrue(all(len(r["lights"]) <= hue.MAX_GROUP_LIGHTS for r in other))
+        self.assertLessEqual(sum(len(r["lights"]) for r in built), hue.MAX_MEMBERSHIPS)
+        self.assertEqual(total, 20000)
+
+    def test_all_off_is_one_pass_and_one_snapshot(self):
+        """All off on a bridge with many lights: every command queued at once, one emit."""
+        uid = lambda n: "%08x-1111-1111-1111-111111111111" % n
+        resources = [{"id": uid(n), "type": "light", "metadata": {"name": "L"}, "on": {"on": True}} for n in range(1, 5001)]
+        resources += [{"id": uid(200000 + n), "type": "grouped_light"} for n in range(6)]
+        resources += [{"id": uid(100000 + n), "type": "room", "services": [{"rtype": "grouped_light", "rid": uid(200000 + n)}],
+                       "children": [{"rtype": "light", "rid": uid(m)} for m in range(1 + n * 150, 151 + n * 150)]}
+                      for n in range(6)]
+        h = hue.Hue.__new__(hue.Hue)
+        h.rooms, _, _ = hue.build_model(resources)
+        h.lock, h.pending, h.wake, h.config = threading.RLock(), {}, threading.Event(), {"ip": "x"}
+        emits = []
+        h.emit = lambda: emits.append(1)
+        start = time.monotonic()
+        h.handle({"cmd": "all_off"})
+        self.assertLess(time.monotonic() - start, 0.5)
+        self.assertEqual(len(emits), 1)
+        self.assertTrue(h.wake.is_set())
+        loose = sum(len(r["lights"]) for r in h.rooms if r["kind"] == "other")
+        self.assertEqual(len(h.pending), 6 + loose)
+        self.assertTrue(all(body == {"on": {"on": False}} for body in h.pending.values()))
+        self.assertFalse(any(l["on"] for r in h.rooms for l in r["lights"]))
+        self.assertFalse(any(r["on"] for r in h.rooms))
+        self.assertEqual(h.on_count, 0)
+        h.handle({"cmd": "all_off"})                 # nothing on any more: nothing queued, no snapshot
+        self.assertEqual(len(emits), 1)
+
     def test_bounded_command_output(self):
         out = hue.run_bounded(["yes"], timeout=2, max_bytes=1000)
         self.assertLessEqual(len(out), 1000)

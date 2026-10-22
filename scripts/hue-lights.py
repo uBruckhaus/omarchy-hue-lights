@@ -39,7 +39,8 @@ MAX_BODY = 4 * 1024 * 1024
 MAX_CONFIG = 64 * 1024
 # Rooms and zones name their lights directly or through devices, and nothing stops
 # a bridge from repeating them: each group keeps a light once and at most
-# MAX_GROUP_LIGHTS of them, all groups together at most MAX_MEMBERSHIPS.
+# MAX_GROUP_LIGHTS of them, all groups together at most MAX_MEMBERSHIPS. The lights
+# in no room ("Other lights") are a group like the others: the same two limits.
 MAX_GROUP_LIGHTS = 150
 MAX_MEMBERSHIPS = 1000
 # Each room or zone ID is shown once. Scenes are kept once per ID, at most
@@ -296,7 +297,13 @@ def build_model(resources):
                 "lights": members,
                 "scenes": scenes_by_group.pop(group["id"], []),
             })
-    loose = [light_entry(l) for lid, l in lights.items() if lid not in assigned]
+    loose = []
+    for lid, light in lights.items():
+        if len(loose) >= min(MAX_GROUP_LIGHTS, budget[0]):
+            break
+        if lid not in assigned:
+            loose.append(light_entry(light))
+    budget[0] -= len(loose)
     if loose:
         loose.sort(key=lambda l: l["name"].lower())
         on_members = [l for l in loose if l["on"]]
@@ -686,6 +693,37 @@ class Hue:
         self.emit()
         self.wake.set()
 
+    def all_off(self):
+        """Every room that is on, and every light in no room that is on: all commands queued at
+        once, the model updated in one pass, one snapshot and one wake-up (not one per light)."""
+        with self.lock:
+            items = []
+            for room in self.rooms:
+                if room["kind"] == "room" and room["on"] and valid_uuid(room["grouped_light"]):
+                    items.append(("grouped_light", room["grouped_light"]))
+                elif room["kind"] == "other":
+                    items += [("light", light["id"]) for light in room["lights"] if light["on"]]
+            if not items:
+                return
+            for key in items:
+                self.pending[key] = {**self.pending.get(key, {}), "on": {"on": False}}
+            groups = {rid for kind, rid in items if kind == "grouped_light"}
+            off = {rid for kind, rid in items if kind == "light"}
+            for room in self.rooms:
+                if room["grouped_light"] in groups:
+                    off.update(light["id"] for light in room["lights"])
+            for room in self.rooms:
+                for light in room["lights"]:
+                    if light["id"] in off:
+                        light["on"] = False
+                lit = sum(1 for light in room["lights"] if light["on"])
+                room["on_count"] = lit
+                room["on"] = bool(lit) and room["grouped_light"] not in groups
+            self.on_count = sum(1 for r in self.rooms if r["kind"] != "zone" for l in r["lights"] if l["on"])
+            self.refresh_hold_until = time.time() + 1.0
+        self.emit()
+        self.wake.set()
+
     def apply_optimistic(self, kind, rid, body):
         on = body.get("on", {}).get("on") if "on" in body else None
         bri = body.get("dimming", {}).get("brightness") if "dimming" in body else None
@@ -786,13 +824,7 @@ class Hue:
             if body:
                 self.queue(kind, rid, body)
         elif name == "all_off" and self.config:
-            for room in self.snapshot()["rooms"]:
-                if room["kind"] == "room" and room["on"] and valid_uuid(room["grouped_light"]):
-                    self.queue("grouped_light", room["grouped_light"], {"on": {"on": False}})
-                elif room["kind"] == "other":
-                    for light in room["lights"]:
-                        if light["on"]:
-                            self.queue("light", light["id"], {"on": {"on": False}})
+            self.all_off()
         elif name == "scene" and self.config:
             rid = cmd.get("id")
             if valid_uuid(rid):
