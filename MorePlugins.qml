@@ -5,8 +5,13 @@
 // marketplace plugins (I18n.MORE_PLUGINS, this plugin left out), with its
 // glyph, name and a one-line explanation. A click opens the plugin's page in
 // the Omarchy Plugin Marketplace. The URLs are fixed https addresses built in
-// I18n.moreUrl; nothing here is read from the network.
+// I18n.moreUrl. With `catalogScript` set (plugin_catalog.py, put in by
+// install_more.py), the list comes from the marketplace's catalog when the
+// page shows: known plugins keep their glyph and translated one-liner, new
+// ones get a generic glyph and their English summary. Without it, or until
+// it answers, the built-in list is shown.
 import QtQuick
+import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -31,7 +36,62 @@ Column {
   // A card was clicked and its page is opening: the panel can close.
   signal opened()
 
-  readonly property var plugins: I18n.MORE_PLUGINS.filter(function(p) { return p.id !== more.ownId })
+  // Path of plugin_catalog.py; empty: the built-in list only.
+  property string catalogScript: ""
+  // The marketplace's list ([{id, name, summary}]), null until read.
+  property var catalog: null
+
+  readonly property var plugins: more.cards(more.catalog).filter(function(p) { return p.id !== more.ownId })
+
+  function cards(found) {
+    if (!found || found.length === 0) return I18n.MORE_PLUGINS
+    var listed = {}
+    for (var i = 0; i < found.length; i++) listed[found[i].id] = found[i]
+    var known = {}
+    var out = []
+    I18n.MORE_PLUGINS.forEach(function(p) {
+      known[p.id] = true
+      if (listed[p.id]) out.push({ id: p.id, name: listed[p.id].name || p.name, glyph: p.glyph, key: p.key, summary: "" })
+    })
+    found.forEach(function(p) {
+      if (!known[p.id]) out.push({ id: p.id, name: p.name, glyph: "\u{F03D6}", key: "", summary: p.summary || p.name })
+    })
+    return out
+  }
+
+  // One JSON line from plugin_catalog.py; only well-formed entries are kept.
+  function readCatalog(line) {
+    var data
+    try { data = JSON.parse(line) } catch (e) { return }
+    if (!data || !Array.isArray(data.plugins)) return
+    var kept = []
+    for (var i = 0; i < data.plugins.length && kept.length < 60; i++) {
+      var p = data.plugins[i]
+      if (!p || typeof p.id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,99}$/.test(p.id)) continue
+      if (typeof p.name !== "string" || p.name.trim() === "") continue
+      kept.push({ id: p.id, name: p.name.slice(0, 60),
+                  summary: typeof p.summary === "string" ? p.summary.slice(0, 120) : "" })
+    }
+    more.catalog = kept
+  }
+
+  // Asks the marketplace when the page shows: at most once an hour from here as well (plugin_catalog.py
+  // keeps the same limit on disk), so reopening the page never starts a download again.
+  property real catalogAsked: 0
+  function askCatalog() {
+    if (!visible || catalogScript === "" || catalogReader.running) return
+    var now = Date.now()
+    if (catalogAsked > 0 && now - catalogAsked < 3600 * 1000) return
+    catalogAsked = now
+    catalogReader.running = true
+  }
+  onVisibleChanged: askCatalog()
+  Component.onCompleted: askCatalog()
+  Process {
+    id: catalogReader
+    command: ["python3", more.catalogScript, more.ownId]
+    stdout: SplitParser { onRead: function(line) { more.readCatalog(line) } }
+  }
   readonly property int columns: 2
   readonly property real gap: Style.space(8)
 
@@ -115,7 +175,7 @@ Column {
           Text {
             width: parent.width
             textFormat: Text.PlainText
-            text: I18n.tr(more.lang, card.modelData.key)
+            text: card.modelData.key ? I18n.tr(more.lang, card.modelData.key) : card.modelData.summary
             color: more.dim
             wrapMode: Text.WordWrap
             maximumLineCount: more.textLines
