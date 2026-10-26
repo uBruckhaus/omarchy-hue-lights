@@ -19,7 +19,7 @@ spec.loader.exec_module(hue)
 def make_cert(directory):
     cert, key = os.path.join(directory, "c.pem"), os.path.join(directory, "k.pem")
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                    "-subj", "/CN=C42996FFFEC9B46D", "-keyout", key, "-out", cert],
+                    "-subj", "/CN=001788FFFE5A3C21", "-keyout", key, "-out", cert],
                    check=True, capture_output=True)
     return cert, key
 
@@ -89,7 +89,7 @@ def huge_length(conn, stop):
 
 
 def normal(conn, stop):
-    body = b'{"bridgeid":"C42996FFFEC9B46D"}'
+    body = b'{"bridgeid":"001788FFFE5A3C21"}'
     conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
 
 
@@ -158,8 +158,8 @@ class HttpTests(unittest.TestCase):
 
     def test_normal_reply_and_pin(self):
         (status, data, peer), _ = self.request(normal)
-        self.assertEqual((status, data["bridgeid"], peer[1]), (200, "C42996FFFEC9B46D", "C42996FFFEC9B46D"))
-        result, _ = self.request(normal, pin={"fingerprint": "0" * 64, "bridge_id": "C42996FFFEC9B46D"})
+        self.assertEqual((status, data["bridgeid"], peer[1]), (200, "001788FFFE5A3C21", "001788FFFE5A3C21"))
+        result, _ = self.request(normal, pin={"fingerprint": "0" * 64, "bridge_id": "001788FFFE5A3C21"})
         self.assertIsInstance(result, hue.PinError)
 
 
@@ -169,7 +169,7 @@ class ConfigTests(unittest.TestCase):
         self.old = (hue.CONFIG_DIR, hue.CONFIG_PATH)
         hue.CONFIG_DIR = os.path.join(self.dir, "hue-lights")
         hue.CONFIG_PATH = os.path.join(hue.CONFIG_DIR, "config.json")
-        self.good = {"ip": "192.168.178.106", "bridge_id": "C42996FFFEC9B46D", "fingerprint": "a" * 64,
+        self.good = {"ip": "192.168.1.50", "bridge_id": "001788FFFE5A3C21", "fingerprint": "a" * 64,
                      "app_key": "abcDEF-123_x", "name": "Hue", "model": "BSB003"}
 
     def tearDown(self):

@@ -599,6 +599,72 @@ class BridgeTextsStayOut(Base):
         self.assertClean(h, client, "fakekey99")
 
 
+class KeptKeys(Base):
+    """Only well-formed keys from a pairing that is still current are kept for redaction,
+    and never more than MAX_SECRETS of them."""
+    def pairing(self, username, clientkey, during_post=None):
+        h = Quiet()
+        hue.save_config = lambda data: None
+        peer = ("f" * 64, BRIDGE)
+
+        def request(ip, method, *a, **k):
+            if method == "GET":
+                return 200, {"bridgeid": BRIDGE}, peer
+            if during_post:
+                during_post(h)
+            return 200, [{"success": {"username": username, "clientkey": clientkey}}], peer
+        hue.https_request = request
+        h.handle({"cmd": "pair", "ip": "192.168.1.50"})
+        h.try_pair()
+        return h
+
+    def test_malformed_keys_are_not_kept(self):
+        h = self.pairing("x" * 5000, "not hex " * 1000)
+        self.assertEqual(h.secrets, set())
+
+    def test_reply_for_a_cancelled_pairing_keeps_no_keys(self):
+        h = self.pairing("goodkey123", "ABCDEF0123", during_post=lambda h: h.handle({"cmd": "cancel_pair"}))
+        self.assertEqual(h.secrets, set())
+        self.assertEqual(h.config, {})
+
+    def test_kept_keys_stay_bounded(self):
+        h = Quiet()
+        hue.save_config = lambda data: None
+        peer = ("f" * 64, BRIDGE)
+        for n in range(50):
+            hue.https_request = lambda ip, method, *a, n=n, **k: (
+                (200, {"bridgeid": BRIDGE}, peer) if method == "GET"
+                else (200, [{"success": {"username": "key%04d" % n, "clientkey": "%032X" % n}}], peer))
+            h.handle({"cmd": "pair", "ip": "192.168.1.50"})
+            h.try_pair()
+        self.assertLessEqual(len(h.secrets), hue.MAX_SECRETS)
+        self.assertIn(h.config["app_key"], h.secrets)
+        h.set_error("errInternal", "Something went wrong (%s)", "x " + h.config["app_key"])
+        self.assertNotIn(h.config["app_key"], h.error)
+
+
+class UnpairDeletion(Base):
+    def test_unpair_without_a_saved_pairing_is_no_error(self):
+        h = Quiet(PIN)
+        h.handle({"cmd": "unpair"})
+        self.assertEqual((h.phase, h.error), ("unpaired", ""))
+
+    def test_unpair_reports_a_pairing_file_it_cannot_delete(self):
+        if os.geteuid() == 0:
+            self.skipTest("root can delete in a read-only folder")
+        hue.save_config(PIN)
+        os.chmod(hue.CONFIG_DIR, 0o500)
+        try:
+            h = Quiet(PIN)
+            h.handle({"cmd": "unpair"})
+            self.assertTrue(os.path.exists(hue.CONFIG_PATH))
+        finally:
+            os.chmod(hue.CONFIG_DIR, 0o700)   # before tearDown removes the folder
+        self.assertEqual((h.phase, h.error_code), ("unpaired", "errInternal"))
+        self.assertIn("could not be deleted", h.error)
+        self.assertEqual(h.config, {})
+
+
 def json_loads_strict(text):
     import json
 

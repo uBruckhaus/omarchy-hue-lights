@@ -57,6 +57,9 @@ MAX_SCENES = 1000
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 BRIDGE_ID_RE = re.compile(r"^[0-9A-F]{16}$")
+APP_KEY_RE = re.compile(r"[A-Za-z0-9_-]{1,100}")     # the bridge's application key ("username")
+CLIENT_KEY_RE = re.compile(r"[0-9A-Fa-f]{1,64}")    # the entertainment client key
+MAX_SECRETS = 8
 
 
 # ---------------------------------------------------------------------------
@@ -450,12 +453,23 @@ def save_config(data):
 
 
 def remove_config():
+    """Delete the saved pairing. True when no pairing file is left (a missing one counts),
+    False when one is still there (not ours, or the folder is read-only)."""
     try:
         info = os.lstat(CONFIG_PATH)
+    except FileNotFoundError:
+        return True
     except OSError:
-        return
-    if (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)) and info.st_uid == os.getuid():
+        return False
+    if not ((stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)) and info.st_uid == os.getuid()):
+        return False
+    try:
         os.unlink(CONFIG_PATH)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 # Children the helper started and has not reaped yet: ended when the helper exits or gets SIGTERM.
@@ -637,11 +651,21 @@ class Hue:
         # started under an older connection drops its result.
         self.conn_generation = 0
         # Keys this process has held (application key, client key): never part of an error text.
+        # Only well-formed keys from a pairing that is still current, at most MAX_SECRETS.
         self.secrets = {self.config["app_key"]} if self.config.get("app_key") else set()
         self.pending = {}          # (kind, id) -> body, coalesced
         self.last_sent = {"light": 0.0, "grouped_light": 0.0, "scene": 0.0}
         self.last_refresh = 0.0
         self.refresh_hold_until = 0.0
+
+    def remember_secrets(self, *keys):
+        """Under self.lock: keep `keys` for redaction. The set stays small: when full, only the
+        current application key survives."""
+        keys = [k for k in keys if k]
+        if len(self.secrets) + len(keys) > MAX_SECRETS:
+            current = self.config.get("app_key")
+            self.secrets = {current} if current else set()
+        self.secrets.update(keys)
 
     def redact(self, text):
         text = str(text)
@@ -848,9 +872,13 @@ class Hue:
                 entry = {}
             key = (entry.get("success") or {}).get("username")
             client_key = (entry.get("success") or {}).get("clientkey")
+            key = key if isinstance(key, str) and APP_KEY_RE.fullmatch(key) else None
+            client_key = client_key if isinstance(client_key, str) and CLIENT_KEY_RE.fullmatch(client_key) else None
             with self.lock:
-                self.secrets.update(k for k in (key, client_key) if isinstance(k, str) and k)
-            if isinstance(key, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", key):
+                if not self.pairing_current(ip, generation):
+                    return   # a reply for an attempt that was cancelled or replaced: nothing kept
+                self.remember_secrets(key, client_key)
+            if key:
                 config = {
                     "ip": ip, "bridge_id": bridge_id, "fingerprint": peer[0],
                     "app_key": key,
@@ -1020,13 +1048,14 @@ class Hue:
             with self.lock:
                 self.pair_generation += 1
                 self.conn_generation += 1
-                try:
-                    remove_config()
-                except OSError:
-                    pass
+                removed = remove_config()
                 self.pair_ip = ""
                 self.config, self.rooms, self.light_count, self.on_count = {}, [], 0, 0
                 self.phase, self.error, self.pending = "unpaired", "", {}
+                if not removed:
+                    # Otherwise the pairing would silently come back with the next start.
+                    self.set_error("errInternal", "Something went wrong (%s)",
+                                   "the saved pairing could not be deleted: " + CONFIG_PATH)
             self.emit()
             self.start_discovery()
         elif name in ("light", "group") and self.config:

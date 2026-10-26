@@ -71,7 +71,7 @@ class ModelTests(unittest.TestCase):
 
 class ValidationTests(unittest.TestCase):
     def test_bridge_ip(self):
-        self.assertTrue(hue.valid_bridge_ip("192.168.178.106"))
+        self.assertTrue(hue.valid_bridge_ip("192.168.1.50"))
         for bad in ("8.8.8.8", "127.0.0.1", "0.0.0.0", "bridge.local", "192.168.1.1/24", ""):
             self.assertFalse(hue.valid_bridge_ip(bad), bad)
 
@@ -87,13 +87,13 @@ class ValidationTests(unittest.TestCase):
 
     def test_parse_avahi(self):
         lines = [
-            '+;wlp15s0;IPv4;Hue\\032Bridge\\032-\\032C9B46D;_hue._tcp;local',
-            '=;wlp15s0;IPv6;Hue\\032Bridge;_hue._tcp;local;x.local;fe80::1;443;"bridgeid=c42996fffec9b46d"',
-            '=;wlp15s0;IPv4;Hue\\032Bridge\\032-\\032C9B46D;_hue._tcp;local;C42996C9B46D.local;192.168.178.106;443;"bridgeid=c42996fffec9b46d" "modelid=BSB003"',
-            '=;wlp15s0;IPv4;Evil;_hue._tcp;local;e.local;1.2.3.4;443;"bridgeid=c42996fffec9b46d"',
+            '+;wlan0;IPv4;Hue\\032Bridge\\032-\\0325A3C21;_hue._tcp;local',
+            '=;wlan0;IPv6;Hue\\032Bridge;_hue._tcp;local;x.local;fe80::1;443;"bridgeid=001788fffe5a3c21"',
+            '=;wlan0;IPv4;Hue\\032Bridge\\032-\\0325A3C21;_hue._tcp;local;0017885A3C21.local;192.168.1.50;443;"bridgeid=001788fffe5a3c21" "modelid=BSB003"',
+            '=;wlan0;IPv4;Evil;_hue._tcp;local;e.local;1.2.3.4;443;"bridgeid=001788fffe5a3c21"',
         ]
         self.assertEqual(hue.parse_avahi_hue(lines),
-                         [{"ip": "192.168.178.106", "bridge_id": "C42996FFFEC9B46D", "name": "Hue Bridge - C9B46D"}])
+                         [{"ip": "192.168.1.50", "bridge_id": "001788FFFE5A3C21", "name": "Hue Bridge - 5A3C21"}])
 
 
 class OptimisticTests(unittest.TestCase):
