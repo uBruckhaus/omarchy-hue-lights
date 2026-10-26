@@ -307,5 +307,92 @@ class StaleCommand(Base):
         self.assertEqual(h.phase, "unpaired")
 
 
+class StaleDispatch(Base):
+    def test_new_pair_stops_sending_queued_commands(self):
+        h = Quiet(PIN)
+        other = "33333333-3333-3333-3333-333333333333"
+        h.pending[("light", LIGHT)] = {"on": {"on": False}}
+        h.pending[("light", other)] = {"on": {"on": False}}
+        hue.LIGHT_INTERVAL, real = 0.0, hue.LIGHT_INTERVAL
+        sent = []
+
+        def request(ip, method, path, body=None, headers=None, **kw):
+            sent.append(path)
+            if len(sent) == 1:
+                h.handle({"cmd": "pair", "ip": "192.168.1.60"})   # a new Pair while the batch runs
+            return 200, {"data": []}, None
+        hue.https_request = request
+        try:
+            h.send_pending()
+        finally:
+            hue.LIGHT_INTERVAL = real
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(h.pending, {})
+
+
+class NonFinite(unittest.TestCase):
+    real_request = hue.https_request
+
+    def test_infinite_brightness_never_reaches_the_snapshot(self):
+        import json
+        data = [
+            {"type": "light", "id": LIGHT, "on": {"on": True}, "dimming": {"brightness": float("inf")},
+             "color": {"xy": {"x": float("nan"), "y": 0.3}}, "color_temperature": {"mirek": float("inf")}},
+            {"type": "grouped_light", "id": "44444444-4444-4444-4444-444444444444",
+             "dimming": {"brightness": float("-inf")}},
+            {"type": "room", "id": ROOM, "metadata": {"name": "Living"}, "children": [{"rid": LIGHT, "rtype": "light"}],
+             "services": [{"rtype": "grouped_light", "rid": "44444444-4444-4444-4444-444444444444"}]},
+        ]
+        reply = json.loads(json.dumps(data))           # the bridge sent 1e309 / Infinity / NaN
+        with self.assertRaises(ValueError):
+            hue.build_model(reply)
+        reply[0]["dimming"]["brightness"] = 250          # finite: clamped, the colours fall back
+        with self.assertRaises(ValueError):
+            hue.build_model(reply)                       # the grouped light is still -Infinity
+        reply[1]["dimming"]["brightness"] = 40
+        rooms, _, _ = hue.build_model(reply)
+        self.assertNotIn("Infinity", json.dumps(rooms, allow_nan=False))
+        self.assertEqual(rooms[0]["lights"][0]["bri"], 100)
+        self.assertEqual(rooms[0]["bri"], 40)
+        h = Quiet(PIN)
+        hue.https_request = lambda *a, **k: (200, {"data": json.loads(json.dumps(data))}, None)
+        try:
+            h.refresh()
+        finally:
+            hue.https_request = self.real_request
+        self.assertEqual((h.phase, h.error_code), ("error", "errReply"))
+
+    def test_brightness_strings_and_nan_from_the_panel(self):
+        self.assertEqual(hue.finite("inf", 50.0, 0, 100), 50.0)
+        self.assertEqual(hue.finite(float("nan"), 50.0, 0, 100), 50.0)
+        self.assertEqual(hue.finite(250, 50.0, 0, 100), 100)
+        h = Quiet(PIN)
+        h.handle({"cmd": "light", "id": LIGHT, "bri": float("nan")})
+        self.assertEqual(h.pending, {})
+
+    def test_emit_never_writes_infinity(self):
+        import io
+        h = hue.Hue.__new__(hue.Hue)
+        hue.load_config = lambda: dict(PIN)
+        hue.Hue.__init__(h)
+        h.rooms = [{"bri": float("inf")}]
+        out, real = io.StringIO(), hue.sys.stdout
+        hue.sys.stdout = out
+        try:
+            h.emit()
+        finally:
+            hue.sys.stdout = real
+        self.assertNotIn("Infinity", out.getvalue())
+        self.assertEqual(json_loads_strict(out.getvalue())["phase"], "error")
+
+
+def json_loads_strict(text):
+    import json
+
+    def refuse(name):
+        raise ValueError(name)
+    return json.loads(text, parse_constant=refuse)
+
+
 if __name__ == "__main__":
     unittest.main()

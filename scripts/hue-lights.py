@@ -15,6 +15,7 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import math
 import os
 import re
 import select
@@ -76,6 +77,16 @@ def clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def finite(value, default, low, high):
+    """A bridge or panel number as a float in [low, high]; `default` for NaN, infinities and junk
+    (json.loads accepts NaN/Infinity, which the panel's JSON.parse would reject)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return clamp(number, low, high) if math.isfinite(number) else default
+
+
 def clean(text, limit=60):
     """Names come from the bridge or mDNS: no markup or control characters ever reach Qt."""
     text = "".join(ch for ch in str(text or "") if ch.isprintable() and ch not in "<>&")
@@ -126,11 +137,8 @@ def _gamma(c):
 
 def xy_to_hex(x, y):
     """CIE xy (Hue colour) to an sRGB hex string at full brightness, for a swatch."""
-    try:
-        x, y = float(x), float(y)
-    except (TypeError, ValueError):
-        return "#ffd27a"
-    if y <= 0:
+    x, y = finite(x, None, 0.0, 1.0), finite(y, None, 0.0, 1.0)
+    if x is None or y is None or y <= 0:
         return "#ffd27a"
     z = 1.0 - x - y
     Y = 1.0
@@ -147,10 +155,10 @@ def xy_to_hex(x, y):
 
 def mirek_to_hex(mirek):
     """Colour temperature (mirek) to an approximate sRGB hex (Tanner Helland fit)."""
-    try:
-        kelvin = 1000000.0 / float(mirek)
-    except (TypeError, ValueError, ZeroDivisionError):
+    mirek = finite(mirek, None, 1.0, 1000000.0)
+    if mirek is None:
         return "#ffd27a"
+    kelvin = 1000000.0 / mirek
     t = clamp(kelvin, 1000, 40000) / 100.0
     import math
     if t <= 66:
@@ -174,6 +182,15 @@ def light_color(light):
     if ct.get("mirek"):
         return mirek_to_hex(ct["mirek"])
     return "#ffd27a"
+
+
+def brightness(value):
+    """A bridge brightness in 0..100; anything else (a string, NaN, an infinity) makes the whole
+    reply one this app does not understand, rather than a value the panel cannot parse."""
+    number = finite(value, None, 0.0, 100.0)
+    if number is None:
+        raise ValueError("unexpected brightness")
+    return number
 
 
 def blend_colors(colors):
@@ -206,7 +223,7 @@ def build_model(resources):
             "id": light["id"],
             "name": clean((light.get("metadata") or {}).get("name") or "Light"),
             "on": bool((light.get("on") or {}).get("on")),
-            "bri": round(float(dimming.get("brightness", 100.0)), 1),
+            "bri": round(brightness(dimming.get("brightness", 100.0)), 1),
             "dimmable": "dimming" in light,
             "color": light_color(light),
             "reachable": connectivity.get(owner, True),
@@ -286,6 +303,7 @@ def build_model(resources):
             on_members = [l for l in members if l["on"]]
             gl = grouped.get(gl_id) or {}
             bri = (gl.get("dimming") or {}).get("brightness")
+            bri = None if bri is None else brightness(bri)
             if bri is None:
                 bri = sum(l["bri"] for l in on_members) / len(on_members) if on_members else 0
             rooms.append({
@@ -610,8 +628,16 @@ class Hue:
             }
 
     def emit(self):
-        line = json.dumps(self.snapshot(), separators=(",", ":"))
+        # Taken, serialised and written under one lock, so snapshots leave in the order they were
+        # taken (an older one can never overwrite the panel's view after Unpair).
         with self.lock:
+            snap = self.snapshot()
+            try:
+                line = json.dumps(snap, separators=(",", ":"), allow_nan=False)
+            except ValueError:   # backstop: a non-finite number the parsers missed
+                self.rooms, self.light_count, self.on_count, self.phase = [], 0, 0, "error"
+                self.set_error("errReply", "The bridge sent a reply this app does not understand.")
+                line = json.dumps(self.snapshot(), separators=(",", ":"), allow_nan=False)
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
 
@@ -844,6 +870,8 @@ class Hue:
             if now - self.last_sent.get(kind, 0) < interval:
                 continue
             with self.lock:
+                if not self.connection_current(generation):
+                    break   # Unpair, Pair or a relocation since the batch started
                 if self.pending.get((kind, rid)) is not body:
                     continue
                 del self.pending[(kind, rid)]
@@ -879,6 +907,7 @@ class Hue:
             with self.lock:
                 self.pair_generation += 1
                 self.conn_generation += 1
+                self.pending = {}   # commands for the old connection are not sent any more
                 self.pair_ip, self.pair_until, self.phase, self.error = ip, time.time() + PAIR_WINDOW, "pairing", ""
             self.emit()
             self.wake.set()
@@ -910,8 +939,12 @@ class Hue:
             body = {}
             if isinstance(cmd.get("on"), bool):
                 body["on"] = {"on": cmd["on"]}
-            if isinstance(cmd.get("bri"), (int, float)):
-                body["dimming"] = {"brightness": round(clamp(float(cmd["bri"]), 1.0, 100.0), 1)}
+            bri = cmd.get("bri")
+            if isinstance(bri, (int, float)) and not isinstance(bri, bool):
+                bri = finite(bri, None, 1.0, 100.0)
+                if bri is None:
+                    return
+                body["dimming"] = {"brightness": round(bri, 1)}
                 body["on"] = {"on": True}
             if body:
                 self.queue(kind, rid, body)
