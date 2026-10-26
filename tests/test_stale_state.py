@@ -36,8 +36,8 @@ class Quiet(hue.Hue):
     def emit(self):
         self.emitted.append(self.snapshot())
 
-    def discover(self):
-        pass
+    def discover_now(self):
+        return []
 
 
 def pair_reply(bridge_id, key="key123"):
@@ -203,7 +203,7 @@ class StaleRefresh(Base):
     def test_refresh_error_after_unpair_is_dropped(self):
         h = Quiet(PIN)
         relocated = []
-        h.discover_now = lambda: relocated.append(1) or []
+        h.relocate = lambda *a: relocated.append(1)
 
         def request(ip, method, path, body=None, headers=None, **kw):
             h.handle({"cmd": "unpair"})
@@ -440,6 +440,72 @@ class StaleWorkerFallback(Base):
             hue.time.sleep = real_sleep
         self.assertEqual(h.error, "")
         self.assertEqual(h.phase, "unpaired")
+
+
+class BoundedWork(Base):
+    def test_commands_only_for_known_resources(self):
+        h = Quiet(PIN)
+        hue.https_request = lambda *a, **k: (200, RESOURCES, None)
+        h.refresh()
+        unknown = "99999999-9999-9999-9999-999999999999"
+        h.handle({"cmd": "light", "id": unknown, "on": False})
+        h.handle({"cmd": "scene", "id": unknown})
+        h.handle({"cmd": "group", "id": unknown, "on": False})
+        self.assertEqual(h.pending, {})
+        h.handle({"cmd": "light", "id": LIGHT, "on": False})
+        self.assertEqual(list(h.pending), [("light", LIGHT)])
+
+    def test_pending_has_a_global_cap(self):
+        h = Quiet(PIN)
+        ids = ["%08x-0000-0000-0000-000000000000" % i for i in range(hue.MAX_PENDING + 50)]
+        hue.https_request = lambda *a, **k: (200, {"data": [
+            {"type": "light", "id": lid, "on": {"on": True}} for lid in ids]}, None)
+        real = hue.MAX_GROUP_LIGHTS, hue.MAX_MEMBERSHIPS
+        hue.MAX_GROUP_LIGHTS = hue.MAX_MEMBERSHIPS = 10 ** 6
+        try:
+            h.refresh()
+        finally:
+            hue.MAX_GROUP_LIGHTS, hue.MAX_MEMBERSHIPS = real
+        for lid in ids:
+            h.handle({"cmd": "light", "id": lid, "on": False})
+        self.assertEqual(len(h.pending), hue.MAX_PENDING)
+
+    def test_one_discovery_at_a_time(self):
+        h = Quiet()
+        started, release = [], threading.Event()
+
+        def discover_now():
+            started.append(1)
+            release.wait(5)
+            return []
+        h.discover_now = discover_now
+        for _ in range(20):
+            h.handle({"cmd": "discover"})
+        h.handle({"cmd": "unpair"})
+        time.sleep(0.2)
+        self.assertEqual(len(started), 1)
+        self.assertTrue(h.discovering)
+        release.set()
+        for _ in range(100):
+            if not h.discovering:
+                break
+            time.sleep(0.02)
+        self.assertFalse(h.discovering)
+        h.handle({"cmd": "discover"})
+        time.sleep(0.2)
+        self.assertEqual(len(started), 2)
+
+    def test_refresh_captured_after_pair_started_changes_nothing(self):
+        h = Quiet(PIN)
+        h.handle({"cmd": "pair", "ip": "192.168.1.60"})   # Pair came first, refresh captures after
+        calls = []
+        hue.https_request = lambda *a, **k: calls.append(1) or (200, RESOURCES, None)
+        h.refresh()
+        self.assertEqual(calls, [])
+        self.assertEqual(h.phase, "pairing")
+        h.handle({"cmd": "cancel_pair"})
+        h.refresh()
+        self.assertEqual(h.phase, "ok")
 
 
 def json_loads_strict(text):

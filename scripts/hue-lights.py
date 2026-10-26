@@ -41,6 +41,7 @@ GROUP_INTERVAL = 0.6  # ... and ~1 group command per second
 HTTP_TIMEOUT = 4.0     # overall deadline per request: connect, TLS, headers and body
 MAX_BODY = 4 * 1024 * 1024
 MAX_CONFIG = 64 * 1024
+MAX_PENDING = 256     # queued light/group/scene commands at most (one per resource)
 MAX_COMMAND = 4096    # bytes per panel command line; longer lines are dropped unread
 # Rooms and zones name their lights directly or through devices, and nothing stops
 # a bridge from repeating them: each group keeps a light once and at most
@@ -674,13 +675,29 @@ class Hue:
 
     # -- bridge access
     def connection(self):
-        """(config snapshot, generation) for network work outside the lock."""
+        """(config snapshot, generation) for network work outside the lock; no config while a
+        pairing runs, so nothing started then can change what the pairing shows."""
         with self.lock:
-            return dict(self.config), self.conn_generation
+            return (dict(self.config) if not self.pair_ip else {}), self.conn_generation
 
     def connection_current(self, generation):
-        """Still the connection the work started under (call with the lock held)."""
-        return self.config and self.conn_generation == generation
+        """Still the connection the work started under, and no pairing running (lock held)."""
+        return bool(self.config) and not self.pair_ip and self.conn_generation == generation
+
+    def known(self, kind, rid):
+        """A light, grouped light or scene of the current model (call with the lock held)."""
+        for room in self.rooms:
+            if kind == "grouped_light" and room["grouped_light"] == rid:
+                return True
+            if kind == "light" and any(light["id"] == rid for light in room["lights"]):
+                return True
+            if kind == "scene" and any(scene["id"] == rid for scene in room["scenes"]):
+                return True
+        return False
+
+    def may_queue(self, kind, rid):
+        """Only resources the panel can show, and at most MAX_PENDING queued (lock held)."""
+        return self.known(kind, rid) and ((kind, rid) in self.pending or len(self.pending) < MAX_PENDING)
 
     def api(self, method, path, body=None, config=None):
         config = config if config is not None else self.connection()[0]
@@ -751,14 +768,32 @@ class Hue:
     def discover_now(self):
         return parse_avahi_hue(run_bounded(["avahi-browse", "-rtpk", "_hue._tcp"]).splitlines())
 
-    def discover(self):
+    def claim_discovery(self):
+        """One discovery at a time: True when this caller got the slot."""
         with self.lock:
+            if self.discovering:
+                return False
             self.discovering = True
-        self.emit()
-        found = self.discover_now()
-        with self.lock:
-            self.candidates, self.discovering = found, False
-        self.emit()
+            return True
+
+    def start_discovery(self):
+        if self.claim_discovery():
+            threading.Thread(target=self.run_discovery, daemon=True).start()
+
+    def discover(self):
+        if self.claim_discovery():
+            self.run_discovery()
+
+    def run_discovery(self):
+        """With the slot claimed: browse, publish the candidates, release the slot."""
+        found = []
+        try:
+            self.emit()
+            found = self.discover_now()
+        finally:
+            with self.lock:
+                self.candidates, self.discovering = found, False
+            self.emit()
 
     # -- pairing
     def pairing_current(self, ip, generation):
@@ -823,6 +858,8 @@ class Hue:
     # -- control commands
     def queue(self, kind, rid, body):
         with self.lock:
+            if not self.may_queue(kind, rid):
+                return
             key = (kind, rid)
             merged = dict(self.pending.get(key, {}))
             merged.update(body)
@@ -927,7 +964,7 @@ class Hue:
             self.last_refresh = 0
             self.wake.set()
         elif name == "discover":
-            threading.Thread(target=self.discover, daemon=True).start()
+            self.start_discovery()
         elif name == "pair":
             ip = str(cmd.get("ip", "")).strip()
             if not valid_bridge_ip(ip):
@@ -961,7 +998,7 @@ class Hue:
                 self.config, self.rooms, self.light_count, self.on_count = {}, [], 0, 0
                 self.phase, self.error, self.pending = "unpaired", "", {}
             self.emit()
-            threading.Thread(target=self.discover, daemon=True).start()
+            self.start_discovery()
         elif name in ("light", "group") and self.config:
             kind = "light" if name == "light" else "grouped_light"
             rid = cmd.get("id")
@@ -985,6 +1022,8 @@ class Hue:
             rid = cmd.get("id")
             if valid_uuid(rid):
                 with self.lock:
+                    if not self.may_queue("scene", rid):
+                        return
                     self.pending[("scene", rid)] = {"recall": {"action": "active"}}
                     self.refresh_hold_until = 0
                 self.wake.set()
