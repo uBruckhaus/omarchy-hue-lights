@@ -508,6 +508,97 @@ class BoundedWork(Base):
         self.assertEqual(h.phase, "ok")
 
 
+class NoKeyRequestAfterCancel(Base):
+    def run_with(self, during_get):
+        h = Quiet()
+        posts = []
+
+        def request(ip, method, path, body=None, headers=None, **kw):
+            peer = ("f" * 64, BRIDGE)
+            if method == "GET":
+                during_get(h)                      # Cancel / Unpair / new Pair while the GET runs
+                return 200, {"bridgeid": BRIDGE, "name": "Hue"}, peer
+            posts.append(ip)
+            return 200, [{"success": {"username": "fakekey"}}], peer
+        hue.https_request = request
+        h.handle({"cmd": "pair", "ip": "192.168.1.50"})
+        h.try_pair()
+        return h, posts
+
+    def test_cancel_during_first_request_sends_no_key_request(self):
+        for during in (lambda h: h.handle({"cmd": "cancel_pair"}),
+                       lambda h: h.handle({"cmd": "unpair"}),
+                       lambda h: h.handle({"cmd": "pair", "ip": "192.168.1.60"})):
+            h, posts = self.run_with(during)
+            self.assertEqual(posts, [])
+            self.assertEqual(h.config, {})
+
+
+FAKE_KEY = "FakeAppKey0123456789abcdefABCDEF-_xyz0123"
+KEYED = dict(PIN, app_key=FAKE_KEY)
+
+
+class BridgeTextsStayOut(Base):
+    def assertClean(self, h, *words):
+        text = repr(h.snapshot())
+        for word in words:
+            self.assertNotIn(word, text)
+
+    def test_bridge_error_description_never_reaches_the_snapshot(self):
+        h = Quiet(KEYED)
+        echo = "invalid key " + FAKE_KEY + " <b>busy</b>"
+        hue.https_request = lambda *a, **k: (200, {"errors": [{"description": echo}], "data": []}, None)
+        h.refresh()
+        self.assertEqual((h.phase, h.error_code), ("error", "errReply"))
+        self.assertClean(h, FAKE_KEY, "busy", "invalid key")
+        hue.https_request = lambda *a, **k: (200, RESOURCES, None)
+        h.refresh()
+        hue.https_request = lambda *a, **k: (200, {"errors": [{"description": echo}]}, None)
+        h.handle({"cmd": "light", "id": LIGHT, "on": False})
+        h.send_pending()
+        self.assertEqual(h.error_code, "errCommand")
+        self.assertClean(h, FAKE_KEY, "busy", "invalid key")
+
+    def test_pairing_error_description_never_reaches_the_snapshot(self):
+        h = Quiet()
+        peer = ("f" * 64, BRIDGE)
+        hue.https_request = lambda ip, method, *a, **k: (
+            (200, {"bridgeid": BRIDGE}, peer) if method == "GET"
+            else (200, [{"error": {"type": 7, "description": "<i>secret detail</i>"}}], peer))
+        h.handle({"cmd": "pair", "ip": "192.168.1.50"})
+        h.try_pair()
+        self.assertEqual(h.error_code, "errPairFailed")
+        self.assertClean(h, "secret detail")
+
+    def test_key_in_exception_text_is_redacted(self):
+        h = Quiet(KEYED)
+        relocated = []
+        h.relocate = lambda *a: relocated.append(1)
+
+        def request(*a, **k):
+            raise hue.http.client.HTTPException("got line hue-application-key: " + FAKE_KEY)
+        hue.https_request = request
+        h.refresh()
+        self.assertEqual(h.error_code, "errUnreachable")
+        self.assertClean(h, FAKE_KEY, FAKE_KEY[:12])
+        h.set_error("errInternal", "Something went wrong (%s)", "x " + FAKE_KEY)
+        self.assertClean(h, FAKE_KEY)
+
+    def test_client_key_from_pairing_is_redacted_too(self):
+        saved = []
+        hue.save_config = lambda data: saved.append(data)
+        h = Quiet()
+        peer = ("f" * 64, BRIDGE)
+        client = "0123456789ABCDEF0123456789ABCDEF"
+        hue.https_request = lambda ip, method, *a, **k: (
+            (200, {"bridgeid": BRIDGE}, peer) if method == "GET"
+            else (200, [{"success": {"username": "fakekey99", "clientkey": client}}], peer))
+        h.handle({"cmd": "pair", "ip": "192.168.1.50"})
+        h.try_pair()
+        h.set_error("errInternal", "Something went wrong (%s)", client + " fakekey99")
+        self.assertClean(h, client, "fakekey99")
+
+
 def json_loads_strict(text):
     import json
 

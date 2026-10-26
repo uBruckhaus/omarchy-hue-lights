@@ -41,9 +41,9 @@ class Fixes(unittest.TestCase):
     def test_clip_errors_are_failures(self):
         hue.https_request = lambda *a, **k: (200, {"errors": [{"description": "<b>device busy</b>"}], "data": []}, None)
         h = Quiet(PIN)
-        with self.assertRaises(OSError) as raised:
+        with self.assertRaises(hue.BridgeError) as raised:
             h.api("PUT", "/clip/v2/resource/light/x", {})
-        self.assertIn("device busy", str(raised.exception))
+        self.assertNotIn("device busy", str(raised.exception))   # the bridge's text never travels on
         self.assertNotIn("<", str(raised.exception))
 
     def test_unexpected_reply_is_an_error_not_a_crash(self):

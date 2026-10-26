@@ -531,6 +531,10 @@ class PinError(Exception):
     pass
 
 
+class BridgeError(Exception):
+    """The bridge answered with CLIP "errors": a fixed message, never the bridge's own text."""
+
+
 def https_request(ip, method, path, body=None, headers=None, pin=None, timeout=HTTP_TIMEOUT, port=443):
     """One HTTPS request to the bridge. Returns (status, parsed_json, (fingerprint, cn)).
 
@@ -632,16 +636,31 @@ class Hue:
         # Bumped by pair, a saved pairing and unpair: a refresh, relocation or command that
         # started under an older connection drops its result.
         self.conn_generation = 0
+        # Keys this process has held (application key, client key): never part of an error text.
+        self.secrets = {self.config["app_key"]} if self.config.get("app_key") else set()
         self.pending = {}          # (kind, id) -> body, coalesced
         self.last_sent = {"light": 0.0, "grouped_light": 0.0, "scene": 0.0}
         self.last_refresh = 0.0
         self.refresh_hold_until = 0.0
 
+    def redact(self, text):
+        text = str(text)
+        for secret in self.secrets | {self.config.get("app_key") or ""}:
+            if len(secret) >= 6:
+                text = text.replace(secret, "***")
+        return text
+
+    def safe(self, exc, limit):
+        """An exception's text for the panel: keys removed first, then cleaned and cut."""
+        return clean(self.redact(exc), limit)
+
     def set_error(self, code, text, *args):
-        """English message for logs and old panels, plus a code and arguments the panel translates."""
-        self.error = text % args if args else text
+        """English message for logs and old panels, plus a code and arguments the panel translates.
+        Keys are removed from every part as a backstop."""
+        args = [self.redact(a) for a in args]
+        self.error = self.redact(text % tuple(args) if args else text)
         self.error_code = code
-        self.error_args = [str(a) for a in args]
+        self.error_args = args
 
     # -- output
     def snapshot(self):
@@ -710,8 +729,7 @@ class Hue:
             raise OSError("bridge returned HTTP %d" % status)
         errors = data.get("errors") if isinstance(data, dict) else None
         if isinstance(errors, list) and errors:
-            first = errors[0] if isinstance(errors[0], dict) else {}
-            raise OSError("bridge error: %s" % clean(first.get("description") or "?", 60))
+            raise BridgeError("bridge reported an error")
         return data
 
     def refresh(self):
@@ -729,14 +747,14 @@ class Hue:
                     if time.time() >= self.refresh_hold_until:
                         self.rooms, self.light_count, self.on_count = rooms, total, on
                     self.phase, self.error = "ok", ""
-        except (ValueError, TypeError, KeyError, AttributeError):
+        except (ValueError, TypeError, KeyError, AttributeError, BridgeError):
             failure = ("errReply", "The bridge sent a reply this app does not understand.")
         except PinError:
             failure = ("errCert", "The bridge certificate changed. Unpair and pair again if you replaced the bridge.")
         except PermissionError:
             failure = ("errRejected", "The bridge no longer accepts this app. Unpair and pair again.")
         except (OSError, socket.timeout, http.client.HTTPException) as exc:
-            failure = ("errUnreachable", "Bridge not reachable (%s)", clean(exc, 80))
+            failure = ("errUnreachable", "Bridge not reachable (%s)", self.safe(exc, 80))
         if failure:
             with self.lock:
                 current = self.connection_current(generation)
@@ -817,6 +835,9 @@ class Hue:
                     self.pair_ip = ""
                     self.phase = "unpaired"
                 return
+            with self.lock:
+                if not self.pairing_current(ip, generation):
+                    return   # Cancel, Unpair or a new Pair during the first request: no key request
             host = clean(socket.gethostname(), 19) or "pc"
             _, resp, peer2 = https_request(ip, "POST", "/api",
                                            {"devicetype": "omarchy_hue_lights#" + host, "generateclientkey": True})
@@ -826,6 +847,9 @@ class Hue:
             if not isinstance(entry.get("success", {}), dict) or not isinstance(entry.get("error", {}), dict):
                 entry = {}
             key = (entry.get("success") or {}).get("username")
+            client_key = (entry.get("success") or {}).get("clientkey")
+            with self.lock:
+                self.secrets.update(k for k in (key, client_key) if isinstance(k, str) and k)
             if isinstance(key, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", key):
                 config = {
                     "ip": ip, "bridge_id": bridge_id, "fingerprint": peer[0],
@@ -848,12 +872,14 @@ class Hue:
                 with self.lock:
                     if not self.pairing_current(ip, generation):
                         return
-                    self.set_error("errPairFailed", "Pairing failed: %s", clean((entry.get("error") or {}).get("description") or "?", 80))
+                    kind = (entry.get("error") or {}).get("type")
+                    self.set_error("errPairFailed", "Pairing failed: %s",
+                                   "bridge error %d" % kind if type(kind) is int and 0 <= kind < 100000 else "bridge error")
         except (OSError, socket.timeout, http.client.HTTPException, PinError, ValueError) as exc:
             with self.lock:
                 if not self.pairing_current(ip, generation):
                     return
-                self.set_error("errCannotReach", "Cannot reach %s (%s)", ip, clean(exc, 60))
+                self.set_error("errCannotReach", "Cannot reach %s (%s)", ip, self.safe(exc, 60))
 
     # -- control commands
     def queue(self, kind, rid, body):
@@ -945,10 +971,14 @@ class Hue:
                 del self.pending[(kind, rid)]
             try:
                 self.api("PUT", "/clip/v2/resource/%s/%s" % (kind, rid), body, config=config)
+            except BridgeError:
+                with self.lock:
+                    if self.connection_current(generation):
+                        self.set_error("errCommand", "Command failed (%s)", "bridge error")
             except (OSError, PinError, PermissionError, socket.timeout, http.client.HTTPException) as exc:
                 with self.lock:
                     if self.connection_current(generation):
-                        self.set_error("errCommand", "Command failed (%s)", clean(exc, 60))
+                        self.set_error("errCommand", "Command failed (%s)", self.safe(exc, 60))
             self.last_sent[kind] = time.time()
             sent = True
         return sent
@@ -1042,7 +1072,7 @@ class Hue:
                 with self.lock:
                     # Not after Unpair, Cancel or a new Pair: the failure belonged to the old state.
                     if generations == (self.pair_generation, self.conn_generation):
-                        self.set_error("errInternal", "Something went wrong (%s)", clean(exc, 60))
+                        self.set_error("errInternal", "Something went wrong (%s)", self.safe(exc, 60))
                 try:
                     self.emit()
                 except OSError:
@@ -1094,7 +1124,7 @@ class Hue:
                 self.handle(cmd)
             except Exception as exc:   # noqa: BLE001 - one bad command must not end the helper
                 with self.lock:
-                    self.set_error("errInternal", "Something went wrong (%s)", clean(exc, 60))
+                    self.set_error("errInternal", "Something went wrong (%s)", self.safe(exc, 60))
                 self.emit()
 
 
