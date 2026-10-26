@@ -17,6 +17,7 @@ import json
 import os
 import re
 import select
+import signal
 import socket
 import ssl
 import stat
@@ -184,8 +185,9 @@ def blend_colors(colors):
 def build_model(resources):
     """Turn the flat CLIP v2 /resource list into rooms -> lights / scenes."""
     by_type = {}
-    for res in resources or []:
-        by_type.setdefault(res.get("type"), []).append(res)
+    for res in resources if isinstance(resources, list) else []:
+        if isinstance(res, dict):
+            by_type.setdefault(res.get("type"), []).append(res)
     lights = {r["id"]: r for r in by_type.get("light", []) if valid_uuid(r.get("id"))}
     grouped = {r["id"]: r for r in by_type.get("grouped_light", []) if valid_uuid(r.get("id"))}
     devices = {r["id"]: r for r in by_type.get("device", []) if valid_uuid(r.get("id"))}
@@ -362,7 +364,7 @@ def private_config_dir():
 
 def load_config():
     try:
-        fd = os.open(CONFIG_PATH, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(CONFIG_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # a FIFO must not block
     except OSError:
         return {}
     try:
@@ -416,10 +418,21 @@ def remove_config():
         os.unlink(CONFIG_PATH)
 
 
+def _die_with_parent():
+    """In a child process: end it when the helper ends (PR_SET_PDEATHSIG), so a helper that is
+    killed while it waits does not leave avahi-browse running."""
+    try:
+        import ctypes
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL)
+    except (OSError, AttributeError):
+        pass
+
+
 def run_bounded(argv, timeout=6.0, max_bytes=262144):
     """Run a fixed argv (no shell) and read at most `max_bytes` of stdout before `timeout`."""
     try:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                preexec_fn=_die_with_parent)
     except OSError:
         return ""
     chunks, size = [], 0
@@ -543,6 +556,7 @@ class Hue:
         self.discovering = False
         self.pair_ip = ""
         self.pair_until = 0.0
+        self.pair_generation = 0   # bumped by pair, cancel_pair and unpair
         self.pending = {}          # (kind, id) -> body, coalesced
         self.last_sent = {"light": 0.0, "grouped_light": 0.0, "scene": 0.0}
         self.last_refresh = 0.0
@@ -587,6 +601,10 @@ class Hue:
             raise PermissionError("bridge rejected the app key")
         if status >= 400:
             raise OSError("bridge returned HTTP %d" % status)
+        errors = data.get("errors") if isinstance(data, dict) else None
+        if isinstance(errors, list) and errors:
+            first = errors[0] if isinstance(errors[0], dict) else {}
+            raise OSError("bridge error: %s" % clean(first.get("description") or "?", 60))
         return data
 
     def refresh(self):
@@ -594,11 +612,17 @@ class Hue:
             return
         try:
             data = self.api("GET", "/clip/v2/resource")
-            rooms, total, on = build_model((data or {}).get("data"))
+            if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+                raise ValueError("unexpected reply")
+            rooms, total, on = build_model(data["data"])
             with self.lock:
                 if time.time() >= self.refresh_hold_until:
                     self.rooms, self.light_count, self.on_count = rooms, total, on
                 self.phase, self.error = "ok", ""
+        except (ValueError, TypeError, KeyError, AttributeError):
+            with self.lock:
+                self.phase = "error"
+                self.set_error("errReply", "The bridge sent a reply this app does not understand.")
         except PinError:
             with self.lock:
                 self.phase = "error"
@@ -640,14 +664,23 @@ class Hue:
         self.emit()
 
     # -- pairing
+    def pairing_current(self, ip, generation):
+        """Still the pairing this attempt started for (call with the lock held)."""
+        return self.pair_ip == ip and self.pair_generation == generation
+
     def try_pair(self):
-        ip = self.pair_ip
+        with self.lock:
+            ip, generation = self.pair_ip, self.pair_generation
+        if not ip:
+            return
         try:
             _, cfg, peer = https_request(ip, "GET", "/api/0/config")
             cfg = cfg if isinstance(cfg, dict) else {}
             bridge_id = str((cfg or {}).get("bridgeid", "")).upper()
             if not BRIDGE_ID_RE.match(bridge_id) or peer[1] != bridge_id:
                 with self.lock:
+                    if not self.pairing_current(ip, generation):
+                        return
                     self.set_error("errNotHue", "%s does not look like a Hue bridge", ip)
                     self.pair_ip = ""
                     self.phase = "unpaired"
@@ -667,18 +700,25 @@ class Hue:
                     "app_key": key,
                     "name": clean(cfg.get("name") or "Hue Bridge"), "model": clean(cfg.get("modelid") or ""),
                 }
-                save_config(config)
                 with self.lock:
+                    if not self.pairing_current(ip, generation):
+                        return
+                    save_config(config)
                     self.config, self.pair_ip, self.phase, self.error = config, "", "connecting", ""
                 self.wake.set()
             elif (entry.get("error") or {}).get("type") == 101:
                 with self.lock:
-                    self.error = ""  # link button not pressed yet: keep asking
+                    if self.pairing_current(ip, generation):
+                        self.error = ""  # link button not pressed yet: keep asking
             else:
                 with self.lock:
+                    if not self.pairing_current(ip, generation):
+                        return
                     self.set_error("errPairFailed", "Pairing failed: %s", clean((entry.get("error") or {}).get("description") or "?", 80))
         except (OSError, socket.timeout, http.client.HTTPException, PinError, ValueError) as exc:
             with self.lock:
+                if not self.pairing_current(ip, generation):
+                    return
                 self.set_error("errCannotReach", "Cannot reach %s (%s)", ip, clean(exc, 60))
 
     # -- control commands
@@ -793,11 +833,13 @@ class Hue:
                 self.emit()
                 return
             with self.lock:
+                self.pair_generation += 1
                 self.pair_ip, self.pair_until, self.phase, self.error = ip, time.time() + PAIR_WINDOW, "pairing", ""
             self.emit()
             self.wake.set()
         elif name == "cancel_pair":
             with self.lock:
+                self.pair_generation += 1
                 self.pair_ip, self.phase = "", ("connecting" if self.config else "unpaired")
             self.emit()
         elif name == "unpair":
@@ -806,6 +848,8 @@ class Hue:
             except OSError:
                 pass
             with self.lock:
+                self.pair_generation += 1
+                self.pair_ip = ""
                 self.config, self.rooms, self.light_count, self.on_count = {}, [], 0, 0
                 self.phase, self.error, self.pending = "unpaired", "", {}
             self.emit()
@@ -835,41 +879,56 @@ class Hue:
 
     # -- loops
     def worker(self):
+        """One round at a time. Whatever goes wrong in a round (a bridge reply of a shape
+        nobody expected) is shown as an error and the next round runs: the thread never dies
+        while the helper process stays up, which the extension could not notice."""
         while True:
-            if self.pair_ip:
-                if time.time() > self.pair_until:
-                    with self.lock:
-                        self.pair_ip = ""
-                        self.phase = "unpaired"
-                        self.set_error("errNoPress", "No button press seen. Press the round button on the bridge, then try again.")
-                else:
-                    self.try_pair()
-                self.emit()
-                if self.pair_ip:
-                    self.wake.wait(2.0)
-                    self.wake.clear()
-                continue
-            if self.send_pending():
+            try:
+                self.work_once()
+            except Exception as exc:   # noqa: BLE001 - the loop must survive anything
                 with self.lock:
-                    has_more = bool(self.pending)
-                if not has_more:
-                    # Let the bridge settle, then show the real state.
-                    self.last_refresh = time.time() - (POLL_OPEN if self.panel_open else POLL_CLOSED) + 1.2
-                continue
+                    self.set_error("errInternal", "Something went wrong (%s)", clean(exc, 60))
+                try:
+                    self.emit()
+                except OSError:
+                    return
+                time.sleep(2.0)
+
+    def work_once(self):
+        if self.pair_ip:
+            if time.time() > self.pair_until:
+                with self.lock:
+                    self.pair_ip = ""
+                    self.phase = "unpaired"
+                    self.set_error("errNoPress", "No button press seen. Press the round button on the bridge, then try again.")
+            else:
+                self.try_pair()
+            self.emit()
+            if self.pair_ip:
+                self.wake.wait(2.0)
+                self.wake.clear()
+            return
+        if self.send_pending():
             with self.lock:
                 has_more = bool(self.pending)
-            if has_more:
-                time.sleep(0.05)
-                continue
-            interval = POLL_OPEN if self.panel_open else POLL_CLOSED
-            if self.config and time.time() - self.last_refresh >= interval:
-                self.refresh()
-                self.emit()
-            elif not self.config and not self.candidates and not self.discovering and self.panel_open:
-                self.discover()
-            wait = max(0.05, interval - (time.time() - self.last_refresh)) if self.config else 5.0
-            self.wake.wait(wait)
-            self.wake.clear()
+            if not has_more:
+                # Let the bridge settle, then show the real state.
+                self.last_refresh = time.time() - (POLL_OPEN if self.panel_open else POLL_CLOSED) + 1.2
+            return
+        with self.lock:
+            has_more = bool(self.pending)
+        if has_more:
+            time.sleep(0.05)
+            return
+        interval = POLL_OPEN if self.panel_open else POLL_CLOSED
+        if self.config and time.time() - self.last_refresh >= interval:
+            self.refresh()
+            self.emit()
+        elif not self.config and not self.candidates and not self.discovering and self.panel_open:
+            self.discover()
+        wait = max(0.05, interval - (time.time() - self.last_refresh)) if self.config else 5.0
+        self.wake.wait(wait)
+        self.wake.clear()
 
     def run(self):
         self.emit()
