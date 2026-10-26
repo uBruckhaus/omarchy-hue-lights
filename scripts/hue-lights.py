@@ -10,6 +10,7 @@ connection afterwards. The application key lives in
 process.
 """
 
+import atexit
 import hashlib
 import http.client
 import ipaddress
@@ -17,6 +18,7 @@ import json
 import os
 import re
 import select
+import shutil
 import signal
 import socket
 import ssl
@@ -418,21 +420,39 @@ def remove_config():
         os.unlink(CONFIG_PATH)
 
 
-def _die_with_parent():
-    """In a child process: end it when the helper ends (PR_SET_PDEATHSIG), so a helper that is
-    killed while it waits does not leave avahi-browse running."""
-    try:
-        import ctypes
-        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL)
-    except (OSError, AttributeError):
-        pass
+# Children the helper started and has not reaped yet: ended when the helper exits or gets SIGTERM.
+_CHILDREN = set()
+_CHILDREN_LOCK = threading.Lock()
+_SETPRIV = None   # path of util-linux setpriv, "" when it is not installed; looked up once
+
+
+def kill_children():
+    with _CHILDREN_LOCK:
+        children = list(_CHILDREN)
+    for proc in children:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except OSError:
+            pass
+
+
+def _parent_death_prefix():
+    """`setpriv --pdeathsig KILL --` so a child ends even when the helper is SIGKILLed. No Python
+    preexec_fn: running Python between fork and exec in this threaded process can deadlock."""
+    global _SETPRIV
+    if _SETPRIV is None:
+        _SETPRIV = shutil.which("setpriv") or ""
+    return [_SETPRIV, "--pdeathsig", "KILL", "--"] if _SETPRIV else []
 
 
 def run_bounded(argv, timeout=6.0, max_bytes=262144):
     """Run a fixed argv (no shell) and read at most `max_bytes` of stdout before `timeout`."""
     try:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                preexec_fn=_die_with_parent)
+        with _CHILDREN_LOCK:
+            proc = subprocess.Popen(_parent_death_prefix() + list(argv), stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            _CHILDREN.add(proc)
     except OSError:
         return ""
     chunks, size = [], 0
@@ -461,6 +481,8 @@ def run_bounded(argv, timeout=6.0, max_bytes=262144):
             proc.wait(timeout=0.5)
         except subprocess.SubprocessError:
             pass
+        with _CHILDREN_LOCK:
+            _CHILDREN.discard(proc)
     return b"".join(chunks).decode("utf-8", "replace")
 
 
@@ -557,6 +579,9 @@ class Hue:
         self.pair_ip = ""
         self.pair_until = 0.0
         self.pair_generation = 0   # bumped by pair, cancel_pair and unpair
+        # Bumped by pair, a saved pairing and unpair: a refresh, relocation or command that
+        # started under an older connection drops its result.
+        self.conn_generation = 0
         self.pending = {}          # (kind, id) -> body, coalesced
         self.last_sent = {"light": 0.0, "grouped_light": 0.0, "scene": 0.0}
         self.last_refresh = 0.0
@@ -591,12 +616,20 @@ class Hue:
             sys.stdout.flush()
 
     # -- bridge access
-    def pin(self):
-        return {"fingerprint": self.config.get("fingerprint"), "bridge_id": self.config.get("bridge_id", "")}
+    def connection(self):
+        """(config snapshot, generation) for network work outside the lock."""
+        with self.lock:
+            return dict(self.config), self.conn_generation
 
-    def api(self, method, path, body=None):
-        status, data, _ = https_request(self.config["ip"], method, path, body,
-                                        {"hue-application-key": self.config["app_key"]}, pin=self.pin())
+    def connection_current(self, generation):
+        """Still the connection the work started under (call with the lock held)."""
+        return self.config and self.conn_generation == generation
+
+    def api(self, method, path, body=None, config=None):
+        config = config if config is not None else self.connection()[0]
+        pin = {"fingerprint": config.get("fingerprint"), "bridge_id": config.get("bridge_id", "")}
+        status, data, _ = https_request(config["ip"], method, path, body,
+                                        {"hue-application-key": config["app_key"]}, pin=pin)
         if status in (401, 403):
             raise PermissionError("bridge rejected the app key")
         if status >= 400:
@@ -608,46 +641,53 @@ class Hue:
         return data
 
     def refresh(self):
-        if not self.config:
+        config, generation = self.connection()
+        if not config:
             return
+        failure = None
         try:
-            data = self.api("GET", "/clip/v2/resource")
+            data = self.api("GET", "/clip/v2/resource", config=config)
             if not isinstance(data, dict) or not isinstance(data.get("data"), list):
                 raise ValueError("unexpected reply")
             rooms, total, on = build_model(data["data"])
             with self.lock:
-                if time.time() >= self.refresh_hold_until:
-                    self.rooms, self.light_count, self.on_count = rooms, total, on
-                self.phase, self.error = "ok", ""
+                if self.connection_current(generation):
+                    if time.time() >= self.refresh_hold_until:
+                        self.rooms, self.light_count, self.on_count = rooms, total, on
+                    self.phase, self.error = "ok", ""
         except (ValueError, TypeError, KeyError, AttributeError):
-            with self.lock:
-                self.phase = "error"
-                self.set_error("errReply", "The bridge sent a reply this app does not understand.")
+            failure = ("errReply", "The bridge sent a reply this app does not understand.")
         except PinError:
-            with self.lock:
-                self.phase = "error"
-                self.set_error("errCert", "The bridge certificate changed. Unpair and pair again if you replaced the bridge.")
+            failure = ("errCert", "The bridge certificate changed. Unpair and pair again if you replaced the bridge.")
         except PermissionError:
-            with self.lock:
-                self.phase = "error"
-                self.set_error("errRejected", "The bridge no longer accepts this app. Unpair and pair again.")
+            failure = ("errRejected", "The bridge no longer accepts this app. Unpair and pair again.")
         except (OSError, socket.timeout, http.client.HTTPException) as exc:
+            failure = ("errUnreachable", "Bridge not reachable (%s)", clean(exc, 80))
+        if failure:
             with self.lock:
-                self.phase = "error"
-                self.set_error("errUnreachable", "Bridge not reachable (%s)", clean(exc, 80))
-            self.relocate()
+                current = self.connection_current(generation)
+                if current:
+                    self.phase = "error"
+                    self.set_error(*failure)
+            if current and failure[0] == "errUnreachable":
+                self.relocate(config, generation)
         self.last_refresh = time.time()
 
-    def relocate(self):
-        """The bridge got a new DHCP address: find it again by bridge id via mDNS."""
-        bridge_id = self.config.get("bridge_id")
+    def relocate(self, config, generation):
+        """The bridge got a new DHCP address: find it again by bridge id via mDNS. The new address
+        is saved only if Unpair or another Pair did not replace the connection meanwhile."""
+        bridge_id = config.get("bridge_id")
         if not bridge_id:
             return
         for cand in self.discover_now():
-            if cand["bridge_id"] == bridge_id and cand["ip"] != self.config.get("ip"):
+            if cand["bridge_id"] == bridge_id and cand["ip"] != config.get("ip"):
                 with self.lock:
-                    self.config["ip"] = cand["ip"]
-                    save_config(self.config)
+                    if not self.connection_current(generation):
+                        return
+                    moved = dict(self.config, ip=cand["ip"])
+                    save_config(moved)
+                    self.config = moved
+                    self.conn_generation += 1
                 self.wake.set()
                 return
 
@@ -704,6 +744,8 @@ class Hue:
                     if not self.pairing_current(ip, generation):
                         return
                     save_config(config)
+                    self.conn_generation += 1
+                    self.rooms, self.light_count, self.on_count, self.pending = [], 0, 0, {}
                     self.config, self.pair_ip, self.phase, self.error = config, "", "connecting", ""
                 self.wake.set()
             elif (entry.get("error") or {}).get("type") == 101:
@@ -794,8 +836,9 @@ class Hue:
     def send_pending(self):
         sent = False
         now = time.time()
+        config, generation = self.connection()
         with self.lock:
-            items = list(self.pending.items())
+            items = list(self.pending.items()) if config else []
         for (kind, rid), body in items:
             interval = GROUP_INTERVAL if kind == "grouped_light" else LIGHT_INTERVAL
             if now - self.last_sent.get(kind, 0) < interval:
@@ -805,10 +848,11 @@ class Hue:
                     continue
                 del self.pending[(kind, rid)]
             try:
-                self.api("PUT", "/clip/v2/resource/%s/%s" % (kind, rid), body)
+                self.api("PUT", "/clip/v2/resource/%s/%s" % (kind, rid), body, config=config)
             except (OSError, PinError, PermissionError, socket.timeout, http.client.HTTPException) as exc:
                 with self.lock:
-                    self.set_error("errCommand", "Command failed (%s)", clean(exc, 60))
+                    if self.connection_current(generation):
+                        self.set_error("errCommand", "Command failed (%s)", clean(exc, 60))
             self.last_sent[kind] = time.time()
             sent = True
         return sent
@@ -834,6 +878,7 @@ class Hue:
                 return
             with self.lock:
                 self.pair_generation += 1
+                self.conn_generation += 1
                 self.pair_ip, self.pair_until, self.phase, self.error = ip, time.time() + PAIR_WINDOW, "pairing", ""
             self.emit()
             self.wake.set()
@@ -843,12 +888,15 @@ class Hue:
                 self.pair_ip, self.phase = "", ("connecting" if self.config else "unpaired")
             self.emit()
         elif name == "unpair":
-            try:
-                remove_config()
-            except OSError:
-                pass
+            # One lock for invalidating, deleting and clearing: try_pair validates and saves
+            # under it too, so no pairing reply can save a key between deletion and clearing.
             with self.lock:
                 self.pair_generation += 1
+                self.conn_generation += 1
+                try:
+                    remove_config()
+                except OSError:
+                    pass
                 self.pair_ip = ""
                 self.config, self.rooms, self.light_count, self.on_count = {}, [], 0, 0
                 self.phase, self.error, self.pending = "unpaired", "", {}
@@ -896,12 +944,13 @@ class Hue:
 
     def work_once(self):
         if self.pair_ip:
-            if time.time() > self.pair_until:
-                with self.lock:
+            with self.lock:
+                expired = bool(self.pair_ip) and time.time() > self.pair_until   # a new Pair may have just started
+                if expired:
                     self.pair_ip = ""
-                    self.phase = "unpaired"
+                    self.phase = "connecting" if self.config else "unpaired"
                     self.set_error("errNoPress", "No button press seen. Press the round button on the bridge, then try again.")
-            else:
+            if not expired:
                 self.try_pair()
             self.emit()
             if self.pair_ip:
@@ -939,7 +988,13 @@ class Hue:
                 self.handle(cmd)
 
 
+def _terminate(signum, _frame):
+    sys.exit(128 + signum)   # unwinds the main thread; atexit then ends the children
+
+
 def main():
+    atexit.register(kill_children)
+    signal.signal(signal.SIGTERM, _terminate)
     if "--once" in sys.argv:
         hue = Hue()
         hue.refresh()
