@@ -93,6 +93,19 @@ def normal(conn, stop):
     conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
 
 
+def drip_body_close(conn, stop):
+    # Connection: close hands the socket to the response object: the deadline must still hold.
+    conn.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2000\r\n\r\n")
+    while not stop.is_set():
+        conn.sendall(b" ")
+        time.sleep(0.05)
+
+
+def nested_json(conn, stop):
+    body = b"[" * 100000 + b"]" * 100000
+    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+
+
 class HttpTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -131,6 +144,14 @@ class HttpTests(unittest.TestCase):
 
     def test_endless_body(self):
         self.assertFailsFast(endless_chunked)
+
+    def test_drip_body_after_connection_close(self):
+        self.assertFailsFast(drip_body_close)
+
+    def test_deeply_nested_reply_is_no_crash(self):
+        result, _ = self.request(nested_json)
+        self.assertIsInstance(result, tuple)
+        self.assertIsNone(result[1])
 
     def test_huge_content_length(self):
         self.assertFailsFast(huge_length)

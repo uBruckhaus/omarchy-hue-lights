@@ -41,6 +41,7 @@ GROUP_INTERVAL = 0.6  # ... and ~1 group command per second
 HTTP_TIMEOUT = 4.0     # overall deadline per request: connect, TLS, headers and body
 MAX_BODY = 4 * 1024 * 1024
 MAX_CONFIG = 64 * 1024
+MAX_COMMAND = 4096    # bytes per panel command line; longer lines are dropped unread
 # Rooms and zones name their lights directly or through devices, and nothing stops
 # a bridge from repeating them: each group keeps a light once and at most
 # MAX_GROUP_LIGHTS of them, all groups together at most MAX_MEMBERSHIPS. The lights
@@ -363,9 +364,27 @@ def parse_avahi_hue(lines):
 def parse_command(line):
     try:
         cmd = json.loads(line)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     return cmd if isinstance(cmd, dict) and isinstance(cmd.get("cmd"), str) else None
+
+
+def read_commands(stream):
+    """Commands from a binary stream, one JSON object per line. A line longer than MAX_COMMAND
+    is skipped through its newline without being kept in memory."""
+    while True:
+        line = stream.readline(MAX_COMMAND + 1)
+        if not line:
+            return
+        if len(line) > MAX_COMMAND:
+            while not line.endswith(b"\n"):
+                line = stream.readline(MAX_COMMAND + 1)
+                if not line:
+                    return
+            continue
+        cmd = parse_command(line)
+        if cmd:
+            yield cmd
 
 
 # ---------------------------------------------------------------------------
@@ -522,12 +541,15 @@ def https_request(ip, method, path, body=None, headers=None, pin=None, timeout=H
     ctx.verify_mode = ssl.CERT_NONE  # self-signed Philips cert; pinned below instead
     conn = http.client.HTTPSConnection(ip, port, timeout=timeout, context=ctx)
     # One overall deadline: a responder that drips headers or body byte by byte is
-    # cut off when the timer shuts the socket down, not just per recv().
+    # cut off when the timer shuts the socket down, not just per recv(). The socket is
+    # kept here because a "Connection: close" reply takes it away from conn.sock.
     expired = threading.Event()
+    connected = []
+    resp = None
 
     def cut():
         expired.set()
-        sock = conn.sock
+        sock = connected[0] if connected else conn.sock
         if sock is not None:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
@@ -538,6 +560,9 @@ def https_request(ip, method, path, body=None, headers=None, pin=None, timeout=H
     watchdog.start()
     try:
         conn.connect()
+        connected.append(conn.sock)
+        if expired.is_set():
+            raise OSError("bridge reply timed out")
         der = conn.sock.getpeercert(binary_form=True) or b""
         peer = (fingerprint(der), cert_common_name(der).upper())
         if pin is not None:
@@ -555,6 +580,8 @@ def https_request(ip, method, path, body=None, headers=None, pin=None, timeout=H
             raise OSError("reply too large")
         chunks, size = [], 0
         while size <= MAX_BODY:
+            if expired.is_set():
+                raise OSError("bridge reply timed out")
             chunk = resp.read1(65536)
             if not chunk:
                 break
@@ -567,12 +594,16 @@ def https_request(ip, method, path, body=None, headers=None, pin=None, timeout=H
         raw = b"".join(chunks)
         try:
             parsed = json.loads(raw.decode("utf-8")) if raw else None
-        except ValueError:
+        except (ValueError, RecursionError):
             parsed = None
         return resp.status, parsed, peer
     finally:
         watchdog.cancel()
+        if resp is not None:
+            resp.close()
         conn.close()
+        for sock in connected:
+            sock.close()
 
 
 # ---------------------------------------------------------------------------
@@ -964,11 +995,15 @@ class Hue:
         nobody expected) is shown as an error and the next round runs: the thread never dies
         while the helper process stays up, which the extension could not notice."""
         while True:
+            with self.lock:
+                generations = (self.pair_generation, self.conn_generation)
             try:
                 self.work_once()
             except Exception as exc:   # noqa: BLE001 - the loop must survive anything
                 with self.lock:
-                    self.set_error("errInternal", "Something went wrong (%s)", clean(exc, 60))
+                    # Not after Unpair, Cancel or a new Pair: the failure belonged to the old state.
+                    if generations == (self.pair_generation, self.conn_generation):
+                        self.set_error("errInternal", "Something went wrong (%s)", clean(exc, 60))
                 try:
                     self.emit()
                 except OSError:
@@ -1015,10 +1050,13 @@ class Hue:
     def run(self):
         self.emit()
         threading.Thread(target=self.worker, daemon=True).start()
-        for line in sys.stdin:
-            cmd = parse_command(line)
-            if cmd:
+        for cmd in read_commands(sys.stdin.buffer):
+            try:
                 self.handle(cmd)
+            except Exception as exc:   # noqa: BLE001 - one bad command must not end the helper
+                with self.lock:
+                    self.set_error("errInternal", "Something went wrong (%s)", clean(exc, 60))
+                self.emit()
 
 
 def _terminate(signum, _frame):

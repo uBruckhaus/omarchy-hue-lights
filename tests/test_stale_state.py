@@ -386,6 +386,62 @@ class NonFinite(unittest.TestCase):
         self.assertEqual(json_loads_strict(out.getvalue())["phase"], "error")
 
 
+class CommandInput(unittest.TestCase):
+    def read(self, data):
+        import io
+        return list(hue.read_commands(io.BytesIO(data)))
+
+    def test_oversized_line_is_discarded_through_its_newline(self):
+        big = b'{"cmd":"refresh","x":"' + b"a" * (hue.MAX_COMMAND * 3) + b'"}\n'
+        self.assertEqual(self.read(big + b'{"cmd":"open"}\n'), [{"cmd": "open"}])
+
+    def test_nested_command_is_no_crash(self):
+        nested = b'{"cmd":"x","a":' + b"[" * 5000 + b"]" * 5000 + b"}\n"
+        self.assertEqual(self.read(nested + b'{"cmd":"open"}\n{"cmd":"closed"}'),
+                         [{"cmd": "open"}, {"cmd": "closed"}])
+
+    def test_failing_command_does_not_end_the_loop(self):
+        import io
+        h = Quiet(PIN)
+        seen = []
+
+        def handle(cmd):
+            seen.append(cmd["cmd"])
+            if cmd["cmd"] == "boom":
+                raise RuntimeError("boom")
+        h.handle = handle
+        h.worker = lambda: None
+        real = hue.sys.stdin
+        hue.sys.stdin = io.TextIOWrapper(io.BytesIO(b'{"cmd":"boom"}\n{"cmd":"open"}\n'))
+        try:
+            h.run()
+        finally:
+            hue.sys.stdin = real
+        self.assertEqual(seen, ["boom", "open"])
+
+
+class StaleWorkerFallback(Base):
+    def test_unexpected_exception_after_unpair_shows_no_error(self):
+        h = Quiet(PIN)
+        rounds = []
+
+        def work_once():
+            rounds.append(1)
+            if len(rounds) == 1:
+                h.handle({"cmd": "unpair"})
+                raise RuntimeError("late failure of the old connection")
+            raise SystemExit
+        h.work_once = work_once
+        hue.time.sleep, real_sleep = (lambda s: None), hue.time.sleep
+        try:
+            with self.assertRaises(SystemExit):
+                h.worker()
+        finally:
+            hue.time.sleep = real_sleep
+        self.assertEqual(h.error, "")
+        self.assertEqual(h.phase, "unpaired")
+
+
 def json_loads_strict(text):
     import json
 
