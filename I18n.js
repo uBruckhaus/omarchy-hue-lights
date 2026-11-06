@@ -92,6 +92,7 @@ var STRINGS = {
       "moreLlm": "Which local AI model holds your GPU memory",
       "moreAgents": "Your AI agents, models and MCP servers on one map",
       "moreApps": "Your apps in groups, with shortcuts and a dock",
+      "moreMaprismaLauncher": "Apps, shortcuts and updates, with AI package advice",
       "moreWorkspaces": "Window limits and layouts per workspace",
       "moreHue": "Philips Hue rooms and lights from the bar",
       "moreVideo": "Live translated captions for any video or call",
@@ -159,6 +160,7 @@ var STRINGS = {
       "moreLlm": "Welches lokale KI-Modell deinen GPU-Speicher belegt",
       "moreAgents": "Deine KI-Agenten, Modelle und MCP-Server auf einer Karte",
       "moreApps": "Deine Apps in Gruppen, mit Tastenkürzeln und Dock",
+      "moreMaprismaLauncher": "Apps, Tastenkürzel und Updates, mit KI-Paketberatung",
       "moreWorkspaces": "Fensterlimits und Layouts pro Arbeitsbereich",
       "moreHue": "Philips-Hue-Räume und -Lampen aus der Leiste",
       "moreVideo": "Live übersetzte Untertitel für jedes Video und Gespräch",
@@ -226,6 +228,7 @@ var STRINGS = {
       "moreLlm": "Quel modèle d’IA local occupe la mémoire GPU",
       "moreAgents": "Vos agents IA, modèles et serveurs MCP sur une carte",
       "moreApps": "Vos applis en groupes, avec raccourcis et dock",
+      "moreMaprismaLauncher": "Applis, raccourcis et mises à jour, avec conseils IA",
       "moreWorkspaces": "Limites de fenêtres et dispositions par espace",
       "moreHue": "Pièces et lampes Philips Hue depuis la barre",
       "moreVideo": "Sous-titres traduits en direct pour vidéos et appels",
@@ -293,6 +296,7 @@ var STRINGS = {
       "moreLlm": "Qué modelo de IA local ocupa la memoria de la GPU",
       "moreAgents": "Tus agentes de IA, modelos y servidores MCP en un mapa",
       "moreApps": "Tus apps en grupos, con atajos y un dock",
+      "moreMaprismaLauncher": "Apps, atajos y actualizaciones, con consejos de IA",
       "moreWorkspaces": "Límites de ventanas y diseños por espacio de trabajo",
       "moreHue": "Salas y luces Philips Hue desde la barra",
       "moreVideo": "Subtítulos traducidos en vivo para vídeos y llamadas",
@@ -360,6 +364,7 @@ var STRINGS = {
       "moreLlm": "Quale modello di IA locale occupa la memoria GPU",
       "moreAgents": "I tuoi agenti IA, modelli e server MCP su una mappa",
       "moreApps": "Le tue app in gruppi, con scorciatoie e dock",
+      "moreMaprismaLauncher": "App, scorciatoie e aggiornamenti, con consigli IA",
       "moreWorkspaces": "Limiti di finestre e layout per area di lavoro",
       "moreHue": "Stanze e luci Philips Hue dalla barra",
       "moreVideo": "Sottotitoli tradotti dal vivo per video e chiamate",
@@ -427,6 +432,7 @@ var STRINGS = {
       "moreLlm": "Qual modelo de IA local ocupa a memória da GPU",
       "moreAgents": "Seus agentes de IA, modelos e servidores MCP num mapa",
       "moreApps": "Seus apps em grupos, com atalhos e dock",
+      "moreMaprismaLauncher": "Apps, atalhos e atualizações, com conselhos de IA",
       "moreWorkspaces": "Limites de janelas e layouts por área de trabalho",
       "moreHue": "Ambientes e luzes Philips Hue na barra",
       "moreVideo": "Legendas traduzidas ao vivo para vídeos e chamadas",
@@ -494,6 +500,7 @@ var STRINGS = {
       "moreLlm": "Welk lokaal AI-model je GPU-geheugen gebruikt",
       "moreAgents": "Je AI-agents, modellen en MCP-servers op één kaart",
       "moreApps": "Je apps in groepen, met sneltoetsen en een dock",
+      "moreMaprismaLauncher": "Apps, sneltoetsen en updates, met AI-pakketadvies",
       "moreWorkspaces": "Vensterlimieten en indelingen per werkruimte",
       "moreHue": "Philips Hue-kamers en -lampen vanuit de balk",
       "moreVideo": "Live vertaalde ondertitels bij video’s en gesprekken",
@@ -561,6 +568,7 @@ var STRINGS = {
       "moreLlm": "Który lokalny model AI zajmuje pamięć GPU",
       "moreAgents": "Twoi agenci AI, modele i serwery MCP na jednej mapie",
       "moreApps": "Twoje aplikacje w grupach, ze skrótami i dokiem",
+      "moreMaprismaLauncher": "Aplikacje, skróty i aktualizacje z poradami AI",
       "moreWorkspaces": "Limity okien i układy dla każdego obszaru roboczego",
       "moreHue": "Pokoje i lampy Philips Hue z paska",
       "moreVideo": "Tłumaczone na żywo napisy do filmów i rozmów",
@@ -616,5 +624,5 @@ var STRINGS = {
   }
 }
 
-var MORE_PLUGINS = [{"id": "ubruckhaus.wlan-monitor", "name": "WLAN Monitor", "glyph": "󰐻", "key": "moreWlan"}, {"id": "ubruckhaus.theme-manager", "name": "Theme Manager", "glyph": "󰸌", "key": "moreTheme"}, {"id": "ubruckhaus.bluetooth-monitor", "name": "Bluetooth Monitor", "glyph": "󰂯", "key": "moreBluetooth"}, {"id": "ubruckhaus.llm-usage", "name": "LLM Monitor", "glyph": "󰘚", "key": "moreLlm"}, {"id": "ubruckhaus.ai-agents-map", "name": "AI Agents Map", "glyph": "󰚩", "key": "moreAgents"}, {"id": "ubruckhaus.simple-launcher-for-fools", "name": "App Manager", "glyph": "", "key": "moreApps"}, {"id": "ubruckhaus.simple-tile", "name": "Workspace Presets", "glyph": "󰕮", "key": "moreWorkspaces"}, {"id": "ubruckhaus.hue-lights", "name": "Hue Lights", "glyph": "󰌵", "key": "moreHue"}, {"id": "ubruckhaus.video-trans", "name": "Video Trans", "glyph": "", "key": "moreVideo"}, {"id": "ubruckhaus.simple-reader", "name": "Screen Narrator", "glyph": "", "key": "moreNarrator"}, {"id": "ubruckhaus.simple-recipes", "name": "Simple Recipes", "glyph": "󰭼", "key": "moreRecipes"}, {"id": "ubruckhaus.my-plugins", "name": "My Plugins", "glyph": "󰐱", "key": "moreMyPlugins"}]
+var MORE_PLUGINS = [{"id": "ubruckhaus.wlan-monitor", "name": "WLAN Monitor", "glyph": "󰐻", "key": "moreWlan"}, {"id": "ubruckhaus.theme-manager", "name": "Theme Manager", "glyph": "󰸌", "key": "moreTheme"}, {"id": "ubruckhaus.bluetooth-monitor", "name": "Bluetooth Monitor", "glyph": "󰂯", "key": "moreBluetooth"}, {"id": "ubruckhaus.llm-usage", "name": "LLM Monitor", "glyph": "󰘚", "key": "moreLlm"}, {"id": "ubruckhaus.ai-agents-map", "name": "AI Agents Map", "glyph": "󰚩", "key": "moreAgents"}, {"id": "ubruckhaus.simple-launcher-for-fools", "name": "App Manager", "glyph": "", "key": "moreApps"}, {"id": "ubruckhaus.maprisma-launcher", "name": "Maprisma Launcher", "glyph": "󱓞", "key": "moreMaprismaLauncher"}, {"id": "ubruckhaus.simple-tile", "name": "Workspace Presets", "glyph": "󰕮", "key": "moreWorkspaces"}, {"id": "ubruckhaus.hue-lights", "name": "Hue Lights", "glyph": "󰌵", "key": "moreHue"}, {"id": "ubruckhaus.video-trans", "name": "Video Trans", "glyph": "", "key": "moreVideo"}, {"id": "ubruckhaus.simple-reader", "name": "Screen Narrator", "glyph": "", "key": "moreNarrator"}, {"id": "ubruckhaus.simple-recipes", "name": "Simple Recipes", "glyph": "󰭼", "key": "moreRecipes"}, {"id": "ubruckhaus.my-plugins", "name": "My Plugins", "glyph": "󰐱", "key": "moreMyPlugins"}]
 function moreUrl(id) { return "https://plugins.omarchy.org/plugin.html?id={0}".replace("{0}", encodeURIComponent(id)) }

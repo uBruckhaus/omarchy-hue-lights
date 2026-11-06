@@ -84,11 +84,14 @@ class CatalogTests(unittest.TestCase):
         catalog = {"plugins": CATALOG["plugins"] + [
             {"id": "ubruckhaus.maprisma-launcher", "name": "Maprisma Launcher",
              "repo": "https://github.com/maprisma/omarchy-maprisma-launcher", "description": "Starts Maprisma."}]}
-        record = pc.refresh(self.cache, lambda e: answer(200, json.dumps(catalog).encode()), now=1500)
-        ids = self.ids(record)
-        self.assertIn("ubruckhaus.maprisma-launcher", ids)
-        self.assertTrue(any(i != "ubruckhaus.maprisma-launcher" for i in ids))
-        self.assertNotIn("ubruckhaus.x", ids)
+        asked = []
+
+        def fetch(etag):
+            asked.append(etag)
+            return answer(304) if etag else answer(200, json.dumps(catalog).encode())
+        record = pc.refresh(self.cache, fetch, now=1500)
+        self.assertEqual(asked, [""])                       # a full read, not a conditional one
+        self.assertEqual(self.ids(record), [p["id"] for p in pc.parse(CATALOG)] + ["ubruckhaus.maprisma-launcher"])
 
     def test_read_then_not_changed_then_offline(self):
         asked = []
