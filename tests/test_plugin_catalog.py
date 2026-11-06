@@ -78,6 +78,18 @@ class CatalogTests(unittest.TestCase):
         pc.refresh(self.cache, offline, now=1600)
         self.assertEqual(len(asked), 1)
 
+    def test_full_read_of_an_old_list_keeps_both_owners(self):
+        self.cache.write_text(json.dumps({"checked": 1000, "etag": '"old"',
+                                          "plugins": [{"id": "ubruckhaus.x", "name": "X"}]}))
+        catalog = {"plugins": CATALOG["plugins"] + [
+            {"id": "ubruckhaus.maprisma-launcher", "name": "Maprisma Launcher",
+             "repo": "https://github.com/maprisma/omarchy-maprisma-launcher", "description": "Starts Maprisma."}]}
+        record = pc.refresh(self.cache, lambda e: answer(200, json.dumps(catalog).encode()), now=1500)
+        ids = self.ids(record)
+        self.assertIn("ubruckhaus.maprisma-launcher", ids)
+        self.assertTrue(any(i != "ubruckhaus.maprisma-launcher" for i in ids))
+        self.assertNotIn("ubruckhaus.x", ids)
+
     def test_read_then_not_changed_then_offline(self):
         asked = []
 
