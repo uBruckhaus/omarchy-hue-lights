@@ -7,9 +7,10 @@ there, not in a plugin.
 
 Prints one JSON line, {"plugins": [{"id", "name", "summary"}], "checked": <time or 0>}, and exits.
 The catalog (the file the marketplace site and My Plugins use) is read at most once an hour,
-failed attempts included, and only if it changed (its ETag). Only the author's own entries are
-kept, in ~/.cache/<plugin id>/plugin-catalog.json. Without the network the cached list is printed,
-else an empty one (the page then shows its built-in list). Python standard library plus curl.
+failed attempts included, and only if it changed (its ETag). Only the author's own entries
+(repositories of the account or its organization, OWNERS) are kept, in
+~/.cache/<plugin id>/plugin-catalog.json. Without the network the cached list is printed, else an
+empty one (the page then shows its built-in list). Python standard library plus curl.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ import time
 from pathlib import Path
 
 CATALOG_URL = "https://raw.githubusercontent.com/omacom/omarchy-plugin-marketplace/main/site/catalog.json"
-OWNER = "ubruckhaus"                       # the repositories' owner on GitHub (the author's plugins)
+OWNERS = ["maprisma", "ubruckhaus"]        # the author's GitHub account and organization (repository owners)
 MAX_AGE = 3600
 MAX_BYTES = 40 * 1024 * 1024
 MAX_CACHE_BYTES = 1024 * 1024
@@ -88,7 +89,7 @@ def parse(data) -> list:
     items = data.get("plugins") if isinstance(data, dict) else None
     found = []
     for entry in items if isinstance(items, list) else []:
-        if not isinstance(entry, dict) or owner_of(entry.get("repo")) != OWNER:
+        if not isinstance(entry, dict) or owner_of(entry.get("repo")) not in OWNERS:
             continue
         kept = _entry(entry.get("id"), entry.get("name"), entry.get("description"), entry.get("version"),
                       entry.get("verificationStatus") == "verified")
@@ -153,8 +154,9 @@ def load(path: Path) -> dict:
             if len(plugins) >= MAX_PLUGINS:
                 break
     etag = data.get("etag") if isinstance(data.get("etag"), str) and ETAG.fullmatch(data["etag"]) else ""
+    owners = data.get("owners") if data.get("owners") == OWNERS else None   # None: kept under other owners
     return {"plugins": plugins, "etag": etag, "checked": _time(data.get("checked")),
-            "tried": _time(data.get("tried"))}
+            "tried": _time(data.get("tried")), "owners": owners}
 
 
 def _save(data: dict, path: Path):
@@ -249,13 +251,15 @@ def refresh(path: Path, fetch=fetch, now: float | None = None) -> dict:
     now = time.time() if now is None else now
     cached = load(path)
     plugins = cached.get("plugins", [])
-    last = max(cached.get("checked", 0), cached.get("tried", 0), _ATTEMPTS.get(str(path), 0))
+    current = cached.get("owners") == OWNERS     # a list kept under other owners is read again in full
+    checked = cached.get("checked", 0) if current else 0     # failed attempts still count
+    last = max(checked, cached.get("tried", 0), _ATTEMPTS.get(str(path), 0))
     if last and 0 <= now - last < MAX_AGE:
         return cached
     _ATTEMPTS[str(path)] = now
     try:
-        status, answer, body = split_response(fetch(cached.get("etag", "")))
-        if status == 304 and cached:
+        status, answer, body = split_response(fetch(cached.get("etag", "") if current else ""))
+        if status == 304 and cached and current:
             pass
         elif status == 200:
             data = json.loads(body.decode("utf-8", "replace"))
@@ -265,7 +269,7 @@ def refresh(path: Path, fetch=fetch, now: float | None = None) -> dict:
         else:
             raise OSError(f"HTTP {status}")
         etag = answer.get("etag", "")
-        record = {"checked": now, "etag": etag if ETAG.fullmatch(etag) else "", "plugins": plugins}
+        record = {"checked": now, "etag": etag if ETAG.fullmatch(etag) else "", "plugins": plugins, "owners": OWNERS}
     except Exception:          # offline, too large, refused, not JSON: the cached list (or none)
         record = {**cached, "plugins": plugins, "tried": now}
     try:
