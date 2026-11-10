@@ -220,7 +220,10 @@ def write_new(fd: int, name: str, data: bytes):
     try:
         view = memoryview(data)
         while view:
-            view = view[os.write(out, view):]
+            written = os.write(out, view)
+            if written <= 0:
+                raise OSError("the file could not be written")
+            view = view[written:]
         os.fsync(out)
     except BaseException:
         os.close(out)

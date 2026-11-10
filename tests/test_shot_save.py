@@ -308,6 +308,12 @@ class SaveTest(ShotCase):
         self.assertEqual(Path(result["path"]).read_bytes(), PNG)
 
 
+    def test_write_returning_zero_fails_instead_of_spinning(self):
+        with mock.patch.object(ss.os, "write", return_value=0):
+            code, result = self.run_cli("save", str(self.panel_png()), FOLDER)
+        self.assertEqual(code, 1, result)
+        self.assertEqual(list(self.pictures.iterdir()), [])
+
 class NoteTest(ShotCase):
     def saved(self):
         return Path(self.run_cli("save", str(self.panel_png()), FOLDER)[1]["path"])
