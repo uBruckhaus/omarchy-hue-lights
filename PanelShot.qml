@@ -47,10 +47,14 @@ Item {
   property var corners: ({ radius: Style.cornerRadius, control: Math.min(Style.cornerRadius, 8),
                            small: Math.min(Style.cornerRadius, 4), pill: Style.cornerRadius > 0 ? 999 : 0 })
 
-  // "" (nothing), "busy", "note" (saved, asking for a note), "error"
+  // "" (nothing), "busy" (capturing and saving), "note" (saved, asking for a note),
+  // "noting" (the note is being written: F12 waits for it), "error"
   property string phase: ""
   readonly property bool overlayOpen: phase === "note" || phase === "error"
-  readonly property bool busy: phase === "busy"
+  readonly property bool busy: phase === "busy" || phase === "noting"
+  // The picture Qt draws is at most this big (the shell holds it in memory until it is saved).
+  readonly property int maxSide: 8192
+  readonly property real maxPixels: 40000000
   // The panel should be at least this tall while the overlay shows.
   readonly property real neededHeight: overlayOpen ? card.implicitHeight + Style.space(24) : 0
   property string savedPath: ""
@@ -73,18 +77,26 @@ Item {
     grabDelay.restart()
   }
 
+  // The picture's size in pixels: the panel at the screen's pixel ratio, scaled down to at most
+  // maxSide per side and maxPixels in all.
+  function grabSize(width, height, ratio) {
+    var w = Math.max(1, width * (ratio > 0 ? ratio : 1)), h = Math.max(1, height * (ratio > 0 ? ratio : 1))
+    var scale = Math.min(1, maxSide / w, maxSide / h, Math.sqrt(maxPixels / (w * h)))
+    return Qt.size(Math.max(1, Math.floor(w * scale)), Math.max(1, Math.floor(h * scale)))
+  }
+
   function grabNow() {
     var width = Math.ceil(shot.width), height = Math.ceil(shot.height)
     if (phase !== "busy") return
     if (width <= 0 || height <= 0) { phase = ""; return }
-    var ratio = shot.pixelRatio > 0 ? shot.pixelRatio : 1
     grabbing = true       // the backdrop below, so the picture has the panel's background
     var started = shot.grabToImage(function(result) {
       shot.grabbing = false
+      if (shot.phase !== "busy") return            // F12 switched off meanwhile
       if (!result) { shot.fail("the panel could not be drawn"); return }
       shot.grabbed = result
       prepare.running = true
-    }, Qt.size(Math.round(width * ratio), Math.round(height * ratio)))
+    }, grabSize(width, height, shot.pixelRatio))
     if (!started) { grabbing = false; fail("the panel could not be drawn") }
   }
 
@@ -119,7 +131,8 @@ Item {
   function finish(keepNote) {
     if (phase === "note") {
       var text = keepNote ? noteField.text.trim() : ""
-      phase = ""
+      // Busy until the note is written, so a new F12 cannot replace it.
+      phase = text !== "" ? "noting" : ""
       if (text !== "") {
         noteSaver.pendingText = text.slice(0, 4000)
         noteSaver.command = ["python3", shot.helper, "note", shot.savedPath, shot.folderName]
@@ -162,6 +175,7 @@ Item {
     stdout: StdioCollector { id: prepareOut }
     onExited: function(code) {
       var result = shot.answer(prepareOut.text)
+      if (shot.phase !== "busy") { shot.grabbed = null; return }   // F12 switched off meanwhile
       if (!result || !result.ok || !result.dir) { shot.fail(result && result.error ? result.error : "python3 did not answer"); return }
       shot.tmpPath = result.dir + "/" + shot.randomName()
       var written = shot.grabbed && shot.grabbed.saveToFile(shot.tmpPath)
@@ -177,6 +191,7 @@ Item {
     stdout: StdioCollector { id: saverOut }
     onExited: function(code) {
       var result = shot.answer(saverOut.text)
+      if (shot.phase !== "busy") return
       if (!result || !result.ok || !result.path) { shot.fail(result && result.error ? result.error : "python3 did not answer"); return }
       if (shot.phase === "busy") shot.showNote(result)
     }
@@ -194,11 +209,19 @@ Item {
     }
     onExited: function(code) {
       var result = shot.answer(noteOut.text)
-      if (result && result.ok) return
+      if (result && result.ok) { if (shot.phase === "noting") shot.phase = ""; return }
       shot.errorText = shot.t("shotNoteFailed", [result && result.error ? result.error : "python3 did not answer"])
-      if (shot.phase === "") shot.phase = "error"
+      if (shot.phase === "noting" || shot.phase === "") shot.phase = "error"
     }
   }
+
+  // PNGs an earlier session left in the panel's runtime folder (a save that never ran) go when
+  // the panel loads; nothing is made when the folder is missing.
+  Process {
+    id: cleaner
+    command: ["python3", shot.helper, "cleanup", shot.pluginId]
+  }
+  Component.onCompleted: if (pluginId !== "") cleaner.running = true
 
   // The panel's background, only while the picture is drawn (the card itself belongs to the shell).
   Rectangle {

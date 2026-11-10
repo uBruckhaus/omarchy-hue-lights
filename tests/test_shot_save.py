@@ -78,6 +78,50 @@ class PrepareTest(ShotCase):
         os.chmod(self.runtime / (PLUGIN + "-shot"), 0o755)
         self.assertEqual(self.run_cli("prepare", PLUGIN)[0], 1)
 
+    def test_refuses_unsafe_runtime_root(self):
+        real = Path(self.tmp.name) / "real-run"
+        real.mkdir(mode=0o700)
+        link = Path(self.tmp.name) / "link-run"
+        link.symlink_to(real)
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(link)}):
+            code, result = self.run_cli("prepare", PLUGIN)
+        self.assertEqual(code, 1)
+        self.assertIn("XDG_RUNTIME_DIR", result["error"])
+        self.assertEqual(list(real.iterdir()), [])
+        for mode in (0o777, 0o770, 0o1777, 0o702):
+            os.chmod(self.runtime, mode)
+            code, result = self.run_cli("prepare", PLUGIN)
+            self.assertEqual(code, 1, oct(mode))
+            self.assertIn("XDG_RUNTIME_DIR", result["error"])
+            self.assertFalse((self.runtime / (PLUGIN + "-shot")).exists())
+        os.chmod(self.runtime, 0o700)
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.runtime / "missing")}):
+            self.assertEqual(self.run_cli("prepare", PLUGIN)[0], 1)
+
+    def test_save_refused_when_runtime_root_turned_unsafe(self):
+        tmp = self.panel_png()
+        os.chmod(self.runtime, 0o777)
+        code, result = self.run_cli("save", str(tmp), FOLDER)
+        os.chmod(self.runtime, 0o700)
+        self.assertEqual(code, 1)
+        self.assertFalse(self.pictures.exists())
+
+    def test_cleanup_removes_stale_and_makes_nothing(self):
+        code, result = self.run_cli("cleanup", PLUGIN)
+        self.assertEqual((code, result["dir"]), (0, None))
+        self.assertFalse((self.runtime / (PLUGIN + "-shot")).exists())
+        old = self.panel_png(name="old.png")
+        os.utime(old, (1, 1))
+        fresh = old.parent / "fresh.png"
+        fresh.write_bytes(PNG)
+        code, result = self.run_cli("cleanup", PLUGIN)
+        self.assertEqual(code, 0)
+        self.assertFalse(old.exists())
+        self.assertTrue(fresh.exists())
+        os.chmod(old.parent, 0o755)
+        self.assertEqual(self.run_cli("cleanup", PLUGIN)[0], 1)
+        self.assertEqual(self.run_cli("cleanup", "../x")[0], 1)
+
     def test_removes_stale_pictures_only(self):
         old = self.panel_png(name="old.png")
         os.utime(old, (1, 1))
@@ -125,6 +169,22 @@ class SaveTest(ShotCase):
         (config / "user-dirs.dirs").write_text('XDG_PICTURES_DIR="$HOME/Bilder"\n')
         path = Path(self.run_cli("save", str(self.panel_png()), FOLDER)[1]["path"])
         self.assertEqual(path.parent, self.home / "Bilder" / FOLDER)
+
+    def test_user_dirs_must_be_a_small_regular_file(self):
+        config = self.home / ".config"
+        config.mkdir()
+        real = self.home / "dirs"
+        real.write_text('XDG_PICTURES_DIR="$HOME/Bilder"\n')
+        (config / "user-dirs.dirs").symlink_to(real)            # a link: not followed
+        self.assertEqual(ss.pictures_dir(), str(self.home / "Pictures"))
+        (config / "user-dirs.dirs").unlink()
+        os.mkfifo(config / "user-dirs.dirs")                     # a FIFO must not block
+        self.assertEqual(ss.pictures_dir(), str(self.home / "Pictures"))
+        (config / "user-dirs.dirs").unlink()
+        (config / "user-dirs.dirs").write_text('XDG_PICTURES_DIR="$HOME/Bilder"\n' + "#" * ss.USER_DIRS_LIMIT)
+        self.assertEqual(ss.pictures_dir(), str(self.home / "Pictures"))
+        (config / "user-dirs.dirs").write_text('# x\nXDG_PICTURES_DIR="$HOME/Bilder"\n')
+        self.assertEqual(ss.pictures_dir(), str(self.home / "Bilder"))
 
     def test_refuses_symlinked_folder(self):
         elsewhere = self.home / "elsewhere"

@@ -2,6 +2,7 @@
 """F12 screenshots of a plugin's shell panel (PanelShot.qml), saved like AI Playground's.
 
     shot_save.py prepare <plugin id>             the private folder the panel writes its PNG into
+    shot_save.py cleanup <plugin id>             remove its left-over PNGs (when the panel loads)
     shot_save.py save <tmp.png> "<Folder name>"  move that PNG to ~/Pictures/<Folder name>/
     shot_save.py note <picture> "<Folder name>"  the note from stdin, next to the picture as .txt
 
@@ -15,7 +16,10 @@ written completely, fsync'd, removed again when writing fails). A note is at mos
 no text, no file.
 
 The panel's PNG must be a regular file of this user in $XDG_RUNTIME_DIR/<plugin id>-shot/ (a 0700
-folder of this user, not a link), at most 32 MiB, with a PNG signature; it is removed afterwards.
+folder of this user, not a link, made inside $XDG_RUNTIME_DIR, which must itself be a real folder of
+this user that no one else can write to), at most 32 MiB, with a PNG signature; it is removed
+afterwards. PNGs left there (a save that never ran) go after STALE_SECONDS, on the next prepare
+and when the panel loads (cleanup).
 Nothing is sent anywhere and no other program is started. Python standard library only."""
 
 from __future__ import annotations
@@ -30,7 +34,9 @@ import time
 NOTE_LIMIT = 4000                 # characters of a note: a few sentences, not a document
 NOTE_READ_LIMIT = 64 * 1024       # bytes read from stdin at most
 MAX_PICTURE = 32 * 1024 * 1024    # bytes of one PNG at most
-STALE_SECONDS = 600               # left-over panel PNGs older than this go on the next prepare
+STALE_SECONDS = 120               # left-over panel PNGs older than this go (prepare, cleanup);
+                                  # a PNG lives for the second between the panel's write and save
+USER_DIRS_LIMIT = 64 * 1024       # bytes of user-dirs.dirs read at most
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PLUGIN_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 SHOT_DIR = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}-shot$")
@@ -51,11 +57,23 @@ def home() -> str:
 def pictures_dir() -> str:
     """XDG_PICTURES_DIR from user-dirs.dirs (only "$HOME/…" or an absolute path), else ~/Pictures."""
     config = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home(), ".config")
+    text = ""
     try:
-        with open(os.path.join(config, "user-dirs.dirs"), "rb") as handle:
-            text = handle.read(64 * 1024).decode("utf-8", "replace")
+        # A regular file only (not a link, FIFO or device), read bounded; else ~/Pictures.
+        fd = os.open(os.path.join(config, "user-dirs.dirs"),
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError:
-        text = ""
+        fd = None
+    if fd is not None:
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                data = os.read(fd, USER_DIRS_LIMIT + 1)
+                if len(data) <= USER_DIRS_LIMIT:
+                    text = data.decode("utf-8", "replace")
+        except OSError:
+            text = ""
+        finally:
+            os.close(fd)
     found = None
     for line in text.splitlines():
         match = re.match(r'^\s*XDG_PICTURES_DIR\s*=\s*"([^"]*)"\s*$', line)
@@ -102,30 +120,42 @@ def private_folder(where: str) -> int:
 
 
 def runtime_root() -> str:
+    """$XDG_RUNTIME_DIR: a real folder (not a link) of this user that group and others cannot write."""
     root = os.environ.get("XDG_RUNTIME_DIR") or ""
     if not os.path.isabs(root):
         raise ShotError("XDG_RUNTIME_DIR is not set")
     root = os.path.normpath(root)
     try:
-        info = os.stat(root)
+        info = os.lstat(root)
     except OSError as error:
         raise ShotError("XDG_RUNTIME_DIR is missing") from error
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-        raise ShotError("XDG_RUNTIME_DIR is not yours")
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise ShotError("XDG_RUNTIME_DIR is not a private folder of yours")
     return root
 
 
 def open_runtime_folder(path: str, create: bool) -> int:
-    """$XDG_RUNTIME_DIR/<plugin id>-shot: a 0700 folder of this user, not a link."""
-    if create:
-        try:
-            os.mkdir(path, 0o700)
-        except FileExistsError:
-            pass
+    """$XDG_RUNTIME_DIR/<plugin id>-shot: a 0700 folder of this user, not a link, made and opened
+    relative to a checked handle on $XDG_RUNTIME_DIR."""
+    parent, name = os.path.split(path)
+    if parent != runtime_root() or not SHOT_DIR.match(name):
+        raise ShotError("the panel's picture folder is not a private folder of yours")
+    root = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    except OSError as error:
-        raise ShotError("the panel's picture folder is not a private folder of yours") from error
+        info = os.fstat(root)
+        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise ShotError("XDG_RUNTIME_DIR is not a private folder of yours")
+        if create:
+            try:
+                os.mkdir(name, 0o700, dir_fd=root)
+            except FileExistsError:
+                pass
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=root)
+        except OSError as error:
+            raise ShotError("the panel's picture folder is not a private folder of yours") from error
+    finally:
+        os.close(root)
     info = os.fstat(fd)
     if info.st_uid != os.getuid() or info.st_mode & 0o077:
         os.close(fd)
@@ -212,20 +242,41 @@ def read_panel_png(dfd: int, name: str) -> bytes:
 
 # ------------------------------------------------------------------ commands
 
+def remove_stale(fd: int):
+    now = time.time()
+    for name in os.listdir(fd):
+        try:
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            if name.endswith(".png") and now - info.st_mtime > STALE_SECONDS:
+                os.unlink(name, dir_fd=fd)
+        except OSError:
+            pass
+
+
 def prepare(plugin_id: str) -> dict:
     if not PLUGIN_ID.match(plugin_id or ""):
         raise ShotError("not a plugin id")
     path = os.path.join(runtime_root(), plugin_id + "-shot")
     fd = open_runtime_folder(path, create=True)
     try:
-        now = time.time()
-        for name in os.listdir(fd):
-            try:
-                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                if name.endswith(".png") and now - info.st_mtime > STALE_SECONDS:
-                    os.unlink(name, dir_fd=fd)
-            except OSError:
-                pass
+        remove_stale(fd)
+    finally:
+        os.close(fd)
+    return {"ok": True, "dir": path}
+
+
+def cleanup(plugin_id: str) -> dict:
+    """Left-over PNGs of an earlier session; nothing is made when the folder is missing."""
+    if not PLUGIN_ID.match(plugin_id or ""):
+        raise ShotError("not a plugin id")
+    path = os.path.join(runtime_root(), plugin_id + "-shot")
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return {"ok": True, "dir": None}
+    fd = open_runtime_folder(path, create=False)
+    try:
+        remove_stale(fd)
     finally:
         os.close(fd)
     return {"ok": True, "dir": path}
@@ -289,12 +340,14 @@ def main(argv: list[str]) -> int:
     try:
         if len(argv) == 2 and argv[0] == "prepare":
             result = prepare(argv[1])
+        elif len(argv) == 2 and argv[0] == "cleanup":
+            result = cleanup(argv[1])
         elif len(argv) == 3 and argv[0] == "save":
             result = save(argv[1], argv[2])
         elif len(argv) == 3 and argv[0] == "note":
             result = note(argv[1], argv[2], read_note(sys.stdin.buffer))
         else:
-            raise ShotError("usage: shot_save.py prepare <id> | save <tmp.png> <folder> | note <picture> <folder>")
+            raise ShotError("usage: shot_save.py prepare <id> | cleanup <id> | save <tmp.png> <folder> | note <picture> <folder>")
     except ShotError as error:
         result = {"ok": False, "error": str(error)}
     except OSError as error:
