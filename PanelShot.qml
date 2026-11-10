@@ -92,7 +92,6 @@ Item {
     grabbing = true       // the backdrop below, so the picture has the panel's background
     var started = shot.grabToImage(function(result) {
       shot.grabbing = false
-      if (shot.phase !== "busy") return            // F12 switched off meanwhile
       if (!result) { shot.fail("the panel could not be drawn"); return }
       shot.grabbed = result
       prepare.running = true
@@ -154,7 +153,8 @@ Item {
   }
   // After the panel's own focus call on opening.
   Timer { id: refocus; interval: 120; onTriggered: if (shot.phase === "note" && shot.panelOpen) noteField.forceActiveFocus() }
-  onActiveChanged: if (!active && phase === "busy") phase = ""
+  // Switching F12 off stops new captures only: one in progress (grab, prepare, save, note) runs
+  // to its end, so every process callback belongs to the one capture that is busy.
 
   Keys.onPressed: function(event) {
     var mods = Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier
@@ -175,7 +175,6 @@ Item {
     stdout: StdioCollector { id: prepareOut }
     onExited: function(code) {
       var result = shot.answer(prepareOut.text)
-      if (shot.phase !== "busy") { shot.grabbed = null; return }   // F12 switched off meanwhile
       if (!result || !result.ok || !result.dir) { shot.fail(result && result.error ? result.error : "python3 did not answer"); return }
       shot.tmpPath = result.dir + "/" + shot.randomName()
       var written = shot.grabbed && shot.grabbed.saveToFile(shot.tmpPath)
@@ -191,7 +190,6 @@ Item {
     stdout: StdioCollector { id: saverOut }
     onExited: function(code) {
       var result = shot.answer(saverOut.text)
-      if (shot.phase !== "busy") return
       if (!result || !result.ok || !result.path) { shot.fail(result && result.error ? result.error : "python3 did not answer"); return }
       if (shot.phase === "busy") shot.showNote(result)
     }

@@ -17,7 +17,8 @@ no text, no file.
 
 The panel's PNG must be a regular file of this user in $XDG_RUNTIME_DIR/<plugin id>-shot/ (a 0700
 folder of this user, not a link, made inside $XDG_RUNTIME_DIR, which must itself be a real folder of
-this user that no one else can write to), at most 32 MiB, with a PNG signature; it is removed
+this user that no one else can write to, and every folder above it a real folder of root or this
+user that no one else can change: Qt writes the PNG by path), at most 32 MiB, with a PNG signature; it is removed
 afterwards. PNGs left there (a save that never ran) go after STALE_SECONDS, on the next prepare
 and when the panel loads (cleanup).
 Nothing is sent anywhere and no other program is started. Python standard library only."""
@@ -119,8 +120,18 @@ def private_folder(where: str) -> int:
     return fd
 
 
+def closed_folder(path: str, info) -> bool:
+    """A real directory no other account can change: owned by root or this user and not writable
+    by group or others, or owned by root with the sticky bit (as /tmp: names in it stay theirs)."""
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.getuid()):
+        return False
+    return not info.st_mode & 0o022 or (info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX))
+
+
 def runtime_root() -> str:
-    """$XDG_RUNTIME_DIR: a real folder (not a link) of this user that group and others cannot write."""
+    """$XDG_RUNTIME_DIR: a real folder of this user that group and others cannot write, under
+    folders (from / down) that no other account can change. Qt writes the panel's PNG there by
+    path, so no part of that path may be replaceable by someone else."""
     root = os.environ.get("XDG_RUNTIME_DIR") or ""
     if not os.path.isabs(root):
         raise ShotError("XDG_RUNTIME_DIR is not set")
@@ -131,6 +142,16 @@ def runtime_root() -> str:
         raise ShotError("XDG_RUNTIME_DIR is missing") from error
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
         raise ShotError("XDG_RUNTIME_DIR is not a private folder of yours")
+    above = os.path.dirname(root)
+    while True:
+        try:
+            if not closed_folder(above, os.lstat(above)):
+                raise ShotError(f"{above} (above XDG_RUNTIME_DIR) is open to other accounts")
+        except OSError as error:
+            raise ShotError("XDG_RUNTIME_DIR is missing") from error
+        if above == "/":
+            break
+        above = os.path.dirname(above)
     return root
 
 

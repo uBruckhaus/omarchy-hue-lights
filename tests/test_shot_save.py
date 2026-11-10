@@ -98,6 +98,43 @@ class PrepareTest(ShotCase):
         with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.runtime / "missing")}):
             self.assertEqual(self.run_cli("prepare", PLUGIN)[0], 1)
 
+    def test_refuses_runtime_root_under_open_or_linked_folder(self):
+        base = Path(self.tmp.name)
+        open_dir = base / "open"
+        open_dir.mkdir()
+        os.chmod(open_dir, 0o777)                                # not sticky, not root's
+        run = open_dir / "run"
+        run.mkdir(mode=0o700)
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(run)}):
+            code, result = self.run_cli("prepare", PLUGIN)
+        self.assertEqual(code, 1)
+        self.assertIn("open to other accounts", result["error"])
+        self.assertFalse((run / (PLUGIN + "-shot")).exists())
+        os.chmod(open_dir, 0o1777)                               # sticky, but ours: still open
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(run)}):
+            self.assertEqual(self.run_cli("prepare", PLUGIN)[0], 1)
+        os.chmod(open_dir, 0o700)
+        real = base / "real"
+        real.mkdir(mode=0o700)
+        (real / "run").mkdir(mode=0o700)
+        (base / "via").symlink_to(real)                          # a link above the runtime folder
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(base / "via" / "run")}):
+            code, result = self.run_cli("prepare", PLUGIN)
+        self.assertEqual(code, 1)
+        self.assertFalse((real / "run" / (PLUGIN + "-shot")).exists())
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(run)}):
+            self.assertEqual(self.run_cli("prepare", PLUGIN)[0], 0)  # closed again
+
+    def test_root_owned_sticky_and_closed_folders_count_as_closed(self):
+        info = lambda mode, uid: mock.Mock(st_mode=stat.S_IFDIR | mode, st_uid=uid)
+        self.assertTrue(ss.closed_folder("/tmp", info(0o1777, 0)))
+        self.assertTrue(ss.closed_folder("/run", info(0o755, 0)))
+        self.assertTrue(ss.closed_folder("/home/u", info(0o755, os.getuid())))
+        self.assertFalse(ss.closed_folder("/x", info(0o777, 0)))
+        self.assertFalse(ss.closed_folder("/x", info(0o1777, os.getuid() or 4242)))
+        self.assertFalse(ss.closed_folder("/x", info(0o755, os.getuid() + 1)))
+        self.assertFalse(ss.closed_folder("/x", mock.Mock(st_mode=stat.S_IFLNK | 0o777, st_uid=0)))
+
     def test_save_refused_when_runtime_root_turned_unsafe(self):
         tmp = self.panel_png()
         os.chmod(self.runtime, 0o777)
