@@ -5,6 +5,7 @@ import qs.Ui
 
 // Single-line text field driven by key events only (copied from the hardened field in
 // Video Trans / Screen Narrator; uses the live shell Commons and BorderSurface).
+// Shared copy: ~/Projects/omarchy-plugin-i18n/qml (install_shot.py); `radius` follows a Corners setting.
 //
 // Deliberately NOT a Qt Quick TextInput/TextField: those watch the Wayland clipboard and
 // read foreign clipboard text whenever it changes, with no size or time limit, so a
@@ -32,6 +33,8 @@ FocusScope {
   property real verticalPadding: Style.spacing.inputPaddingY
   property bool hasCursor: false
   property font font: Qt.font({family: Style.font.family, pixelSize: Style.font.body})
+  // Corner radius of the frame; panels with a Corners setting pass its control size.
+  property real radius: Style.cornerRadius
   readonly property bool hovered: hover.hovered
 
   signal accepted()
@@ -91,7 +94,7 @@ FocusScope {
     anchors.fill: parent
     color: Style.controlFill(root._focused, root._hot, root.foreground, root.accent)
     borderSpec: root._borderSpec
-    radius: Style.cornerRadius
+    radius: root.radius
   }
 
   TextMetrics { id: metrics; font: root.font; text: "Ag" }

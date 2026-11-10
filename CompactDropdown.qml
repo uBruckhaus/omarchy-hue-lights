@@ -6,7 +6,9 @@ import qs.Ui
 
 // Copy of Omarchy's Ui/Dropdown (v4.0.4, MIT License, Copyright (c) David
 // Heinemeier Hansson) with a settable font size and a fitWidth, so a
-// settings row can match its caption label.
+// settings row can match its caption label, and settable corners
+// (controlRadius, popupRadius) for a Corners setting. Shared copy:
+// ~/Projects/omarchy-plugin-i18n/qml (install_shot.py).
 //
 // Themed single-select dropdown. Trigger row paints with the kit's focus
 // chrome; the popup anchors below and uses Commons.Color.popups.background +
@@ -37,6 +39,9 @@ Item {
   property int rowHeight: Style.spacing.controlHeight
   property int popupRowHeight: Style.spacing.popupRowHeight
   property real fontSize: Style.font.body
+  // Corners: the trigger is a control, the open list a popup (qml/corners.js sizes).
+  property real controlRadius: Style.cornerRadius
+  property real popupRadius: Style.cornerRadius
   // Width that shows the longest option in full, in this dropdown's own font.
   readonly property real fitWidth: widestOption.advanceWidth + Style.spacing.controlPaddingX + Style.space(32)
 
@@ -101,7 +106,7 @@ Item {
       id: trigger
       width: parent.width
       height: root.rowHeight
-      radius: Style.cornerRadius
+      radius: root.controlRadius
 
       readonly property bool _focused: trigger.activeFocus
       readonly property bool _hot: triggerHover.hovered || root.hasCursor
@@ -178,7 +183,7 @@ Item {
         background: BorderSurface {
           color: root.background
           borderSpec: root.popupBorderSpec
-          radius: Style.cornerRadius
+          radius: root.popupRadius
         }
 
         onOpened: {

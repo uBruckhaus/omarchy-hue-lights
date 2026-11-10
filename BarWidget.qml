@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
 import "I18n.js" as I18n
+import "corners.js" as Corners
 
 // Bar indicator for Philips Hue. Lit bulb in the theme's green while any light is on,
 // dim bulb when all are off or no bridge is paired. Left click opens the panel; right
@@ -28,6 +29,21 @@ Ui.BarWidget {
     else next.language = code
     root.bar.shell.updateEntryInline(root.moduleName, next)
   }
+
+  // Corners of the panel's cards and controls, and the F12 screenshot key (settings page);
+  // both live in this widget's shell.json entry like the language, the defaults as no key.
+  readonly property string cornersSetting: Corners.choice(String(root.setting("corners", "windows")))
+  readonly property var corners: Corners.sizes(cornersSetting, Style.cornerRadius)
+  readonly property bool screenshotKey: root.setting("screenshotKey", true) !== false
+  function saveSetting(key, value, fallback) {
+    if (!root.bar || !root.bar.shell || typeof root.bar.shell.updateEntryInline !== "function") return
+    var next = Object.assign({}, root.settings || {})
+    if (value === fallback) delete next[key]
+    else next[key] = value
+    root.bar.shell.updateEntryInline(root.moduleName, next)
+  }
+  function setCorners(code) { saveSetting("corners", Corners.choice(code), "windows") }
+  function setScreenshotKey(on) { saveSetting("screenshotKey", on === true, true) }
 
   property var stats: ({})
   // Push every snapshot into the panel; never let it read from an older widget instance.

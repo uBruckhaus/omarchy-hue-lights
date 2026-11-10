@@ -33,6 +33,10 @@ Column {
   property int textLines: 3
   // Lines of a plugin's name; two in a narrow panel, so long names wrap.
   property int nameLines: 1
+  // Corners of the cards and of the glyph tiles; a panel with a Corners setting passes its
+  // radius and control sizes (qml/corners.js).
+  property real cardRadius: Style.space(6)
+  property real tileRadius: Style.space(5)
   // A card was clicked and its page is opening: the panel can close.
   signal opened()
 
@@ -126,7 +130,7 @@ Column {
 
         width: (more.width - more.gap * (more.columns - 1)) / more.columns
         height: Math.max(icon.height, textColumn.implicitHeight) + Style.space(16)
-        radius: Style.space(6)
+        radius: more.cardRadius
         color: cardMouse.containsMouse ? Qt.rgba(more.fg.r, more.fg.g, more.fg.b, 0.08) : Qt.rgba(more.fg.r, more.fg.g, more.fg.b, 0.03)
         border.width: 1
         border.color: cardMouse.containsMouse ? Commons.Color.accent : Qt.rgba(more.fg.r, more.fg.g, more.fg.b, 0.16)
@@ -138,7 +142,7 @@ Column {
           anchors.verticalCenter: parent.verticalCenter
           width: Style.space(30)
           height: width
-          radius: Style.space(5)
+          radius: more.tileRadius
           color: Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.16)
 
           Text {
