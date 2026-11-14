@@ -122,6 +122,9 @@ Panel {
   function close() { root.infoOpen = false; root.controller.hide(); root.confirmUnpair = false; root.settingsOpen = false }
   function toggle() { if (root.opened) root.close(); else root.open() }
 
+  // See-through with the window style (Theme Manager → Settings).
+  PopupGlass { inside: shot; active: panel.open }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
