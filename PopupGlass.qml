@@ -1,6 +1,6 @@
 import QtQuick
 import Quickshell
-import Quickshell.Io
+import Qt.labs.folderlistmodel
 import qs.Commons as Commons
 
 // See-through plugin popups, set in Theme Manager → Settings → "Plugin popups
@@ -14,7 +14,8 @@ import qs.Commons as Commons
 //   PopupGlass { inside: keyCatcher; active: panel.open }
 // `inside` is any item of the card's content; the card is found from it.
 // A plugin that paints its own card sets paintCard: false and uses `alpha`.
-// The style is read again each time the popup opens.
+// Only file names are listed (FolderListModel), never file contents; the
+// lists update by themselves when the style or the switch changes.
 Scope {
   id: glass
 
@@ -27,9 +28,9 @@ Scope {
   readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")
   readonly property string togglesDir: stateHome + "/omarchy/toggles/hypr"
 
-  property bool enabled: false
-  property bool glassy: false
-  property bool opaque: false
+  readonly property bool enabled: gate.count > 0
+  readonly property bool glassy: glassyFile.count > 0
+  readonly property bool opaque: opaqueFile.count > 0
   readonly property real alpha: !enabled || opaque ? 1 : glassy ? 0.6 : 0.9
 
   property Item card: null
@@ -42,21 +43,15 @@ Scope {
     return null
   }
 
-  function refresh() {
-    if (!card && paintCard) card = findCard()
-    gate.reload(); glassyFile.reload(); opaqueFile.reload()
-  }
-
-  onActiveChanged: if (active) refresh()
+  onActiveChanged: if (active && !card && paintCard) card = findCard()
   onInsideChanged: card = null
-  Component.onCompleted: refresh()
 
-  FileView { id: gate; path: glass.configHome + "/hypr/theme-manager-glass.lua"; printErrors: false
-    onLoaded: glass.enabled = true; onLoadFailed: glass.enabled = false }
-  FileView { id: glassyFile; path: glass.togglesDir + "/window-glassy.lua"; printErrors: false
-    onLoaded: glass.glassy = true; onLoadFailed: glass.glassy = false }
-  FileView { id: opaqueFile; path: glass.togglesDir + "/window-opaque.lua"; printErrors: false
-    onLoaded: glass.opaque = true; onLoadFailed: glass.opaque = false }
+  FolderListModel { id: gate; folder: "file://" + glass.configHome + "/hypr"
+    nameFilters: ["theme-manager-glass.lua"]; showDirs: false; showHidden: false }
+  FolderListModel { id: glassyFile; folder: "file://" + glass.togglesDir
+    nameFilters: ["window-glassy.lua"]; showDirs: false; showHidden: false }
+  FolderListModel { id: opaqueFile; folder: "file://" + glass.togglesDir
+    nameFilters: ["window-opaque.lua"]; showDirs: false; showHidden: false }
 
   // Only while see-through: otherwise the card keeps its own colour binding.
   Binding {
