@@ -4,10 +4,10 @@ import Qt.labs.folderlistmodel
 import qs.Commons as Commons
 
 // See-through plugin popups, set in Theme Manager → Settings → "Plugin popups
-// follow window style". That switch writes ~/.config/hypr/theme-manager-glass.lua;
-// without it nothing changes here. With it the popup card follows Omarchy's
+// follow window style". That switch creates the marker file
+// ~/.config/omarchy/theme-manager/popup-glass; without it nothing changes here. With it the popup card follows Omarchy's
 // window style (Theme Manager → Font & effects, or Omarchy's own menu):
-// glassy = 0.6 (Hyprland blurs behind, Omarchy's keyboard-panel layer rule),
+// glassy = 0.6 (Hyprland blurs behind: Omarchy's keyboard-panel layer rule, or Theme Manager's run-time rule),
 // transparent = 0.9, opaque = solid. Omarchy's own popups are left alone.
 //
 // Usage, inside the KeyboardPanel / PopupCard:
@@ -24,9 +24,9 @@ Scope {
   property bool paintCard: true
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")
   readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")
   readonly property string togglesDir: stateHome + "/omarchy/toggles/hypr"
+  function folderUrl(path) { return "file://" + path.split("/").map(encodeURIComponent).join("/") }
 
   readonly property bool enabled: gate.count > 0
   readonly property bool glassy: glassyFile.count > 0
@@ -46,11 +46,11 @@ Scope {
   onActiveChanged: if (active && !card && paintCard) card = findCard()
   onInsideChanged: card = null
 
-  FolderListModel { id: gate; folder: "file://" + glass.configHome + "/hypr"
-    nameFilters: ["theme-manager-glass.lua"]; showDirs: false; showHidden: false }
-  FolderListModel { id: glassyFile; folder: "file://" + glass.togglesDir
+  FolderListModel { id: gate; folder: glass.folderUrl(glass.home + "/.config/omarchy/theme-manager")
+    nameFilters: ["popup-glass"]; showDirs: false; showHidden: false }
+  FolderListModel { id: glassyFile; folder: glass.folderUrl(glass.togglesDir)
     nameFilters: ["window-glassy.lua"]; showDirs: false; showHidden: false }
-  FolderListModel { id: opaqueFile; folder: "file://" + glass.togglesDir
+  FolderListModel { id: opaqueFile; folder: glass.folderUrl(glass.togglesDir)
     nameFilters: ["window-opaque.lua"]; showDirs: false; showHidden: false }
 
   // Only while see-through: otherwise the card keeps its own colour binding.
